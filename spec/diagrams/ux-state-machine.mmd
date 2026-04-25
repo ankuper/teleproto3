@@ -1,0 +1,12 @@
+%% ux-state-machine.mmd — three states × three actions.
+%% Normative companion to spec/ux-conformance.md.
+%% TODO(spec-v0.1.0): flesh out with transition conditions.
+
+stateDiagram-v2
+    [*] --> offline
+    offline --> connected: handshake success
+    connected --> degraded: timeouts / drops exceed threshold
+    degraded --> connected: traffic resumes cleanly
+    degraded --> offline: silent-close / retry budget exhausted
+    connected --> offline: user action: rotate
+    offline --> offline: user action: retry

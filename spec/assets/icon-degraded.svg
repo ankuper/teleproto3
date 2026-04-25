@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  icon-degraded.svg — single normative icon for the `degraded` Type3 UI state.
+  Normative: clients MUST use this asset (or a perceptually equivalent
+  redraw) when surfacing the degraded state. Other states are
+  implementation-defined.
+  TODO(spec-v0.1.0): replace this placeholder with the final artwork
+  approved during the UX drafting epic.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" role="img" aria-label="Degraded connection">
+  <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"/>
+  <path d="M12 7 v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="12" cy="16" r="1.25" fill="currentColor"/>
+</svg>

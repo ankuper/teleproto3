@@ -1,0 +1,54 @@
+# banner-discipline.yml — CI fails if any new/modified file under
+# lib/src/ or spec/*.md lacks the required banner (Paige's rule).
+#
+# Canonical banner text:
+#   lib/src/*.c → C block comment: "This is a reference implementation ...
+#                  spec/ wins. File a bug or errata at ..."
+#   spec/*.md   → Markdown blockquote: "Normative. This document defines
+#                  required behaviour ... this document and lib/ differ,
+#                  this document wins."
+#
+# TODO(spec-v0.1.0): switch to diff-scoped check once the tree has real
+# files (checking touched files only, not the whole tree).
+name: banner-discipline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'lib/src/**'
+      - 'spec/**'
+      - '.github/workflows/banner-discipline.yml'
+  pull_request:
+    paths:
+      - 'lib/src/**'
+      - 'spec/**'
+      - '.github/workflows/banner-discipline.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check lib/src/*.c banner
+        run: |
+          missing=0
+          for f in lib/src/*.c; do
+            [ -e "$f" ] || continue
+            if ! head -n 6 "$f" | grep -q 'reference implementation of the Type3 protocol'; then
+              echo "::error file=$f::missing reference-implementation banner"
+              missing=1
+            fi
+          done
+          exit $missing
+      - name: Check spec/*.md banner
+        run: |
+          missing=0
+          for f in spec/*.md; do
+            [ -e "$f" ] || continue
+            if ! head -n 15 "$f" | grep -q '\*\*Normative\.\*\*'; then
+              echo "::error file=$f::missing normative banner"
+              missing=1
+            fi
+          done
+          exit $missing

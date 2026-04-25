@@ -1,0 +1,30 @@
+# build-server.yml — triggered on server/** changes.
+# Builds the MTProxy fork (linking against lib/build/libteleproto3.a),
+# runs server-level tests, and — on `server-v*` tags — publishes the
+# GHCR image `ghcr.io/ankuper/teleproto3-server:<tag>`.
+#
+# TODO(server-v0.1.0): flesh out build + test + image publish steps.
+name: build-server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - 'lib/**'   # lib changes invalidate the server's linked library
+      - '.github/workflows/build-server.yml'
+    tags:
+      - 'server-v*'
+  pull_request:
+    paths:
+      - 'server/**'
+      - 'lib/**'
+      - '.github/workflows/build-server.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "TODO: build lib, build server, run server/tests/**"

@@ -1,0 +1,21 @@
+# telemetry-lint.yml — zero-client-telemetry enforcement (Cat 9).
+# Fails if a diff touching client-facing code introduces known telemetry
+# / beacon / analytics SDK imports or network calls.
+#
+# TODO(v0.1.0): author an allow/deny list + diff scanner. Initial deny
+# list: firebase, sentry, crashlytics, amplitude, mixpanel, segment,
+# datadog-rum, new-relic-browser.
+name: telemetry-lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "TODO: implement telemetry / beacon / SDK deny-list scan"

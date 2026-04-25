@@ -1,0 +1,21 @@
+# vectors-detect-drift.yml — triggered when conformance/vectors/ changes.
+# Notifies consumer repositories that the vector set has drifted so they
+# can bump their pinned conformance-v*.
+#
+# TODO(conformance-v0.1.0): wire to repository_dispatch.
+name: vectors-detect-drift
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'conformance/vectors/**'
+      - '.github/workflows/vectors-detect-drift.yml'
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "TODO: repository_dispatch to consumer forks on vectors drift"

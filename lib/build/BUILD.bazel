@@ -1,0 +1,20 @@
+# BUILD.bazel — Bazel build for libteleproto3.
+# Consumed by the iOS fork via http_archive + SHA256 pin.
+# TODO(lib-v0.1.0): verify with `bazel build //lib:libteleproto3` once
+# the source is real. Paths relative to the package root (lib/build/).
+
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "libteleproto3",
+    srcs = [
+        "//lib/src:t3_secret.c",
+        "//lib/src:t3_obfuscated2.c",
+        "//lib/src:t3_session_header.c",
+        "//lib/src:t3_keyderiv.c",
+        "//lib/src:t3_url_parser.c",
+    ],
+    hdrs = ["//lib/include:t3.h"],
+    includes = ["../include"],
+    copts = ["-std=gnu11", "-O2", "-Wall", "-Wextra", "-Wpedantic"],
+)

@@ -1,0 +1,29 @@
+# conformance-harness.yml — runs the language-agnostic harness
+# (conformance/runner/) against the in-repo reference implementation
+# (lib/) and records PASS/FAIL per scenario. Required on every PR.
+#
+# TODO(conformance-v0.1.0): hook runner/run.sh + verify.py once they
+# exist. Emit a markdown summary as a PR comment.
+name: conformance-harness
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'conformance/**'
+      - 'lib/**'
+      - 'spec/**'
+      - '.github/workflows/conformance-harness.yml'
+  pull_request:
+    paths:
+      - 'conformance/**'
+      - 'lib/**'
+      - 'spec/**'
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "TODO: ./conformance/runner/run.sh --impl ./lib/examples/c-client-side"

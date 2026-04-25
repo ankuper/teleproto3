@@ -1,0 +1,22 @@
+MTProxy upstream licence
+========================
+
+The server/ directory is a `git subtree` of the active upstream
+github.com/teleproxy/teleproxy (community-maintained continuation of
+the archived github.com/TelegramMessenger/MTProxy). The upstream
+licence applies UNCHANGED to every file under this directory,
+including fork-local additions (net-type3-dispatch.{c,h},
+net-type3-stats.{c,h}, etc.).
+
+The upstream licence text lives at:
+  https://github.com/teleproxy/teleproxy/blob/master/LICENSE
+(ancestor, for reference:
+  https://github.com/TelegramMessenger/MTProxy/blob/master/LICENSE )
+
+TODO(server-v0.1.0): vendor the upstream LICENSE text verbatim here
+during the first subtree pull. Recording server/UPSTREAM.md with the
+SHA.
+
+We cannot and do not relicense this directory. If you are building on
+Type3 with a permissive licence in mind, consume `spec/` + `lib/` +
+`conformance/` — all Apache 2.0 — and implement a fresh server.

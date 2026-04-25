@@ -1,0 +1,46 @@
+# ux-strings.yaml — canonical user-facing strings for Type3 clients.
+# Normative: translation keys are stable across MINOR releases.
+# Key renames or removals require a MAJOR spec bump.
+#
+# Languages tracked: en, ru, fa, zh.
+# TODO(spec-v0.1.0): fill in real strings; these are placeholders.
+
+spec_version: 0.1.0-draft
+last_updated: 2026-04-24
+
+strings:
+  state.connected.title:
+    en: "Connected"
+    ru: "Подключено"
+    fa: "متصل"
+    zh: "已连接"
+
+  state.degraded.title:
+    en: "Degraded connection"
+    ru: "Соединение нестабильно"
+    fa: "اتصال ناپایدار"
+    zh: "连接不稳定"
+
+  state.offline.title:
+    en: "Offline"
+    ru: "Нет соединения"
+    fa: "آفلاین"
+    zh: "离线"
+
+  action.retry:
+    en: "Retry"
+    ru: "Повторить"
+    fa: "تلاش مجدد"
+    zh: "重试"
+
+  action.rotate:
+    en: "Switch server"
+    ru: "Сменить сервер"
+    fa: "تعویض سرور"
+    zh: "切换服务器"
+
+  action.report:
+    en: "Report issue"
+    ru: "Сообщить о проблеме"
+    fa: "گزارش مشکل"
+    zh: "报告问题"

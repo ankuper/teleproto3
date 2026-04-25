@@ -1,0 +1,24 @@
+teleproto3 — per-directory licence manifest
+=============================================
+
+This monorepo contains code under multiple licences. Each top-level
+directory ships its own LICENSE file which is authoritative for that
+directory. This manifest exists to make the split obvious at a glance
+(Chromium / Kubernetes convention).
+
+Directory          Licence                           Start point
+-----------------  --------------------------------  --------------------
+spec/              Apache License, Version 2.0       spec/LICENSE
+lib/               Apache License, Version 2.0       lib/LICENSE
+conformance/       Apache License, Version 2.0       conformance/LICENSE
+server/            MTProxy upstream licence          server/LICENSE
+                   (vendored via `git subtree` from
+                   github.com/teleproxy/teleproxy
+                   — active community upstream, continuation of the
+                   archived github.com/TelegramMessenger/MTProxy.
+                   Not relicensable without upstream.)
+
+Root-level documentation files (README.md, OWNERSHIP.md, SECURITY.md,
+CONTRIBUTING.md, this manifest) are Apache 2.0.
+
+Questions about licensing? Open an issue or see OWNERSHIP.md.

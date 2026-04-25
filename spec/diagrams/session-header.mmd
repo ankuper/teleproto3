@@ -1,0 +1,10 @@
+%% session-header.mmd — fixed-size preamble layout.
+%% Normative companion to spec/wire-format.md §3.
+%% TODO(spec-v0.1.0): replace with real field-by-field packet diagram.
+
+graph LR
+    subgraph SessionHeader
+      A[Marker] --> B[Key-ID]
+      B --> C[Nonce]
+      C --> D[Command Slot]
+    end

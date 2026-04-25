@@ -1,0 +1,20 @@
+# CODEOWNERS — teleproto3
+# Per-directory ownership. Lines later in the file take precedence.
+
+# Default owner — catches anything not covered below.
+*                       @ankuper
+
+# Normative spec — any change here changes the protocol.
+/spec/                  @ankuper
+
+# Reference C library.
+/lib/                   @ankuper
+
+# MTProxy fork (subtree-managed).
+/server/                @ankuper
+
+# Conformance harness and vectors.
+/conformance/           @ankuper
+
+# CI / tooling.
+/.github/               @ankuper

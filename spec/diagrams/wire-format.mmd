@@ -1,0 +1,9 @@
+%% wire-format.mmd — byte-level layout of a Type3 frame.
+%% Normative companion to spec/wire-format.md.
+%% TODO(spec-v0.1.0): replace placeholder with real byte-layout diagram.
+
+graph LR
+    TLS[TLS Record] --> WS[WebSocket Frame]
+    WS --> SH[Session Header]
+    SH --> OBF[Obfuscated-2 Payload]
+    OBF --> MTP[MTProto Packet]

@@ -1,0 +1,105 @@
+{
+  "$schema_version": "1.0",
+  "pinned": {
+    "spec": "spec-v0.1.0-draft",
+    "lib":  "lib-v0.1.0-draft"
+  },
+  "_scaffold_note": "TODO(conformance-v0.1.0): populate per-op vectors. Each section is an array of {id, args, expect} objects, where expect is either {ok: true, result: ...} or {ok: false, error: '<CLASS>'}.",
+  "_xfail_pending": "XFAIL-PENDING-1.7: secret-format vectors authored by Story 1.1; runner + xfail materialisation owned by Story 1.7",
+  "secret-format": [
+    {
+      "id": "well-formed-v1",
+      "args": ["ff000102030405060708090a0b0c0d0e0f6578616d706c652e636f6d"],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "000102030405060708090a0b0c0d0e0f",
+          "domain": "example.com"
+        }
+      }
+    },
+    {
+      "id": "well-formed-len-18-min",
+      "args": ["ff00112233445566778899aabbccddeeff61"],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "00112233445566778899aabbccddeeff",
+          "domain": "a"
+        }
+      }
+    },
+    {
+      "id": "well-formed-non-ascii-cyrillic",
+      "args": ["ffaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad0bfd180d0b8d0bcd0b5d1802ed180d184"],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "domain": "пример.рф"
+        }
+      }
+    },
+    {
+      "id": "malformed-len-17",
+      "args": ["ff000102030405060708090a0b0c0d0e0f"],
+      "expect": { "ok": false, "error": "MALFORMED" }
+    },
+    {
+      "id": "malformed-len-zero",
+      "args": [""],
+      "expect": { "ok": false, "error": "MALFORMED" }
+    },
+    {
+      "id": "malformed-prefix-fe",
+      "args": ["fe000102030405060708090a0b0c0d0e0f6578616d706c652e636f6d"],
+      "expect": { "ok": false, "error": "MALFORMED" }
+    },
+    {
+      "id": "malformed-domain-bad-utf8",
+      "args": ["ff000102030405060708090a0b0c0d0e0f80"],
+      "expect": { "ok": false, "error": "MALFORMED" }
+    },
+    {
+      "id": "malformed-domain-truncated-utf8",
+      "args": ["ff000102030405060708090a0b0c0d0e0fc3"],
+      "expect": { "ok": false, "error": "MALFORMED" }
+    },
+    {
+      "id": "trailing-extension-len-4",
+      "args": ["ff0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a6578616d706c652e636f6d2e626b31"],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+          "domain": "example.com.bk1"
+        }
+      }
+    },
+    {
+      "id": "trailing-extension-len-16",
+      "args": ["ff0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b6578616d706c652e636f6d2e626b312e626b322e626b332e626b34"],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+          "domain": "example.com.bk1.bk2.bk3.bk4"
+        }
+      }
+    },
+    {
+      "id": "trailing-extension-len-64",
+      "args": ["ff0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c6578616d706c652e636f6d2e626b312e626b322e626b332e626b342e626b312e626b322e626b332e626b342e626b312e626b322e626b332e626b342e626b312e626b322e626b332e626b34"],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+          "domain": "example.com.bk1.bk2.bk3.bk4.bk1.bk2.bk3.bk4.bk1.bk2.bk3.bk4.bk1.bk2.bk3.bk4"
+        }
+      }
+    }
+  ],
+  "session-header": [],
+  "obfuscated2": [],
+  "url-parser": []
+}

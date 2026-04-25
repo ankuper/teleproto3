@@ -1,0 +1,21 @@
+# ci-portability.yml — sanity check that the repo builds + tests cleanly
+# on non-GitHub CI environments (GitLab, Forgejo). Runs a POSIX-only
+# variant of the build + conformance harness to catch GitHub-Actions-only
+# accidents. (Cat 9 portability.)
+#
+# TODO(v0.1.0): nightly cron + a portable shell script under
+# scripts/ci-portable.sh.
+name: ci-portability
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  posix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "TODO: run scripts/ci-portable.sh (no GitHub-specific constructs)"

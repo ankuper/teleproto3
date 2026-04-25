@@ -1,0 +1,28 @@
+# build-lib.yml — triggered on lib/** changes.
+# Builds libteleproto3.a (POSIX Make), runs unit + integration tests,
+# and on `lib-v*` tags publishes libteleproto3-vX.Y.Z.tar.gz as a
+# GitHub Release asset for consumer forks to pin.
+#
+# TODO(lib-v0.1.0): flesh out build + test + release-asset upload.
+name: build-lib
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'lib/**'
+      - '.github/workflows/build-lib.yml'
+    tags:
+      - 'lib-v*'
+  pull_request:
+    paths:
+      - 'lib/**'
+      - '.github/workflows/build-lib.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "TODO: make -C lib/build, run lib/tests/**"

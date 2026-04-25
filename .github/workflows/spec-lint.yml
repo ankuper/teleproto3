@@ -1,0 +1,36 @@
+# spec-lint.yml — triggered on spec/** changes.
+# Enforces:
+#   1. RFC 2119 keywords (MUST, MUST NOT, SHOULD, SHOULD NOT, MAY) are
+#      UPPERCASE when used normatively.
+#   2. Frontmatter schema `{spec_version, last_updated, status}` is present
+#      on every spec/*.md.
+#   3. Spec is self-contained: `grep 'see lib/\|see src/' spec/*.md` → fail.
+#   4. Normative banner is present (delegated to banner-discipline.yml).
+#
+# TODO(spec-v0.1.0): implement checks (shell + yq + a small linter script).
+name: spec-lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'spec/**'
+      - '.github/workflows/spec-lint.yml'
+  pull_request:
+    paths:
+      - 'spec/**'
+      - '.github/workflows/spec-lint.yml'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Forbid implementation citations in spec/
+        run: |
+          if grep -rnE 'see (lib/|src/)' spec/ --include='*.md'; then
+            echo "::error::spec/ must be self-contained; do not cite lib/ or src/"
+            exit 1
+          fi
+      - name: Frontmatter + RFC 2119 check
+        run: echo "TODO: implement frontmatter schema + RFC 2119 keyword check"

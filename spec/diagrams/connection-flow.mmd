@@ -1,0 +1,16 @@
+%% connection-flow.mmd — TLS → WS upgrade → Session Header → MTProto.
+%% Normative companion to spec/wire-format.md §1–2.
+%% TODO(spec-v0.1.0): expand with timing + anti-probe hooks.
+
+sequenceDiagram
+    participant C as Client
+    participant N as nginx (TLS terminator)
+    participant S as MTProxy server
+
+    C->>N: TLS ClientHello
+    N-->>C: TLS ServerHello
+    C->>N: HTTP GET /ws (Upgrade: websocket)
+    N-->>C: 101 Switching Protocols
+    C->>S: (proxied) WS frame: Session Header
+    S-->>C: WS frame: MTProto ack
+    Note over C,S: Obfuscated-2 payload from here on

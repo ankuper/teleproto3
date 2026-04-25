@@ -1,0 +1,29 @@
+# rotation-scenarios.yaml — secret / domain rotation traces.
+# Covers the observable IUT behaviour when a client migrates from an
+# old Type3 secret to a new one (graceful rotation) and when the
+# server forces rotation via the command slot.
+#
+# Pinned:
+#   spec: spec-v0.1.0-draft
+#   lib:  lib-v0.1.0-draft
+#
+# TODO(conformance-v0.1.0): populate. Seed shape below.
+
+schema_version: "1.0"
+
+scenarios: []
+# - id: rotate-graceful-client-initiated
+#   description: "Client drops old secret mid-session after receiving
+#                 a server command slot hint; reconnects with new secret."
+#   timeline:
+#     - at_ms: 0
+#       action: "open session with secret A"
+#     - at_ms: 1000
+#       action: "server emits command slot: rotate-to-B"
+#     - at_ms: 1200
+#       action: "client SHOULD close session and reopen with secret B"
+#   expect:
+#     observed_actions_in_order:
+#       - "open A"
+#       - "close A"
+#       - "open B"

@@ -1,0 +1,29 @@
+# consumer-dispatch.yml — on lib-v* tag push, send repository_dispatch
+# events to the three client forks so their bump-PR bots open a PR
+# pinning the new libteleproto3 release tarball. (Amelia's automation.)
+#
+# Cross-version CI gate: lib-vX.Y.Z is not considered "final" until all
+# three consumers have reported CI-green against the preceding RC tag.
+# See lib/docs/versioning.md for the full protocol.
+#
+# TODO(lib-v0.1.0): plug in the actual repository_dispatch payload +
+# secrets (PAT with repository_dispatch scope).
+name: consumer-dispatch
+
+on:
+  push:
+    tags:
+      - 'lib-v*'
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        consumer:
+          - ankuper/tdesktop-fork
+          - ankuper/telegram-ios-fork
+          - ankuper/telegram-android-fork
+    steps:
+      - name: Placeholder
+        run: echo "TODO: repository_dispatch to ${{ matrix.consumer }} with lib tag ${{ github.ref_name }}"
