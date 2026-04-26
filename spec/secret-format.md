@@ -2,6 +2,10 @@
 spec_version: 0.1.0-draft
 last_updated: 2026-04-25
 status: draft
+amendment_log:
+  - id: A-003
+    date: 2026-04-25
+    summary: Destination structure — host[/path] split inside domain field (§1.1)
 ---
 
 > **Normative.** This document defines required behaviour for conforming
@@ -30,8 +34,9 @@ offset  length    field
 ------  ------    ----------------------------------------------
 0       1 octet   marker = 0xff
 1       16        key (raw octets, no encoding)
-17      ≥ 1       domain (UTF-8 octets, no terminator, no length
-                  prefix; runs to end-of-buffer)
+17      ≥ 1       domain = <host>[<path>] (UTF-8 octets, no
+                  terminator, no length prefix; runs to
+                  end-of-buffer; structure defined in §1.1)
 ```
 
 The total length of a well-formed secret is `total_len = 17 +
@@ -56,6 +61,46 @@ domain bytes verbatim (see §2).
 The result-shape contract for a successfully parsed secret is fixed
 in §5; downstream sections cite §5 for vector schema.
 
+### 1.1 Destination structure
+
+The `domain` field carries a destination string with the structure
+`<host>[<path>]`, where `<host>` and `<path>` are derived from the
+`domain` octets by a fixed split rule. Let `D` denote the `domain`
+octet sequence (i.e. `buf[17 .. len-1]`) and `0x2f` denote the
+ASCII `/` octet.
+
+- If `D` contains no `0x2f` octet: `host = D`, `path = ""` (empty).
+- If `D[0] == 0x2f`: leading `/` without a host. The buffer is
+  rejected by §2 with **`MALFORMED`**.
+- Otherwise let `i` be the smallest index with `D[i] == 0x2f`;
+  then `host = D[0..i)` and `path = D[i..end]` (path includes its
+  leading `/`).
+
+The split is performed on the **first** `0x2f` only. Any further
+`0x2f` octets are part of `path` and are not interpreted further by
+this layer.
+
+The identity `domain == host || path` (octet concatenation) holds
+for every well-formed secret; parsers **MUST** preserve it.
+
+Both `host` and `path` octets are preserved verbatim. Producers and
+parsers **MUST NOT** apply percent-encoding, percent-decoding,
+case-folding, NFC/NFD/IDNA normalisation, or any other
+transformation to either field. (See §3 for producer rules; §6.1
+for the deferred normalisation discussion.)
+
+The spec imposes **no upper bound** on `domain_len`, `host_len`, or
+`path_len` beyond the §1 constraint `domain_len ≥ 1`. Length-cap
+proposals are recorded as rejected in §6.3 and §6.8; producers
+seeking practical guidance for transport-layer limits (URL paste,
+QR encoding, HTTP request line) consult installer / operator docs,
+not this spec.
+
+The `domain` field is preserved on every parsed result for backward
+compatibility with consumers that read `result.domain`. New
+consumers **SHOULD** read `result.host` and `result.path` directly.
+See §5.2 for the full result schema.
+
 ## 2. Parsing
 
 A conforming parser exposes the operation:
@@ -78,8 +123,15 @@ A conforming parser **MUST**:
   not form a valid UTF-8 sequence (any decoding error: lone
   continuation bytes, truncated multi-byte sequences, invalid lead
   bytes, overlong encodings, or surrogate-range scalar values).
+- Reject with **`MALFORMED`** when `buf[17] == 0x2f` (i.e. `domain`
+  begins with `/` without a host prefix). See §1.1.
 - On success, populate the opaque `t3_secret_t *out` with the parsed
-  key (16 octets) and domain (octet sequence and length).
+  key (16 octets), the full `domain` (octet sequence and length),
+  and the destination split derived per §1.1: `host` (the `domain`
+  octets preceding the first `0x2f`, or the entire `domain` if none
+  is present) and `path` (the `domain` octets from the first `0x2f`
+  to end-of-buffer, or the empty octet sequence if no `0x2f` is
+  present).
 
 A conforming parser **MUST**:
 
@@ -142,6 +194,13 @@ A conforming producer emits exactly the canonical form defined in §1:
 Producers **MUST NOT** emit padding, length prefixes, or
 terminators. Producers **MUST NOT** apply NFC/IDNA normalisation,
 case-folding, or any other transformation to the domain octets.
+
+When the source holds `host` and `path` separately (per §1.1),
+producers **MUST** construct `domain` by octet concatenation
+`domain = host || path`. When `path` is empty, `domain == host`.
+When `path` is non-empty, its first octet **MUST** be `0x2f`
+(`/`); producers **MUST NOT** emit a non-empty `path` whose first
+octet is anything other than `0x2f`.
 
 ### 3.1 Round-trip property
 
@@ -230,7 +289,9 @@ On success (`expect.ok == true`):
 | Field                  | Type     | Required | Description                                                                                  |
 |------------------------|----------|----------|----------------------------------------------------------------------------------------------|
 | `result.key`           | string   | yes      | Exactly 32 lowercase hex characters (16 raw key octets).                                     |
-| `result.domain`        | string   | yes      | UTF-8 string copied verbatim from the parsed domain bytes (no normalisation, no escaping).   |
+| `result.domain`        | string   | yes      | UTF-8 string copied verbatim from the parsed domain bytes (no normalisation, no escaping). Equals `host || path` (octet concatenation; see §1.1). Preserved for backward-compat with v0.1.0-draft consumers; new consumers **SHOULD** read `host` and `path`. |
+| `result.host`          | string   | yes      | UTF-8 string copied verbatim from the host portion of the domain (octets preceding the first `0x2f`, or the entire domain if no `0x2f` is present). Never empty. See §1.1. |
+| `result.path`          | string   | yes      | UTF-8 string copied verbatim from the path portion of the domain (octets from the first `0x2f` to end-of-buffer inclusive of the leading `/`, or the empty string if no `0x2f` is present). May be empty. See §1.1. |
 | `result.extension_blob`| string   | no       | Lowercase hex of trailing octets after the v0.1.0 layout. Absent at v0.1.0; reserved for v0.2.0. |
 
 On failure (`expect.ok == false`):
@@ -254,11 +315,12 @@ the runner.
 
 ### 5.4 Vector inventory
 
-The `secret-format` array contains 11 vectors at v0.1.0:
+The `secret-format` array contains 14 vectors at v0.1.0 (11 baseline +
+3 destination-structure vectors added by amendment A-003):
 
 | ID                              | Polarity | Purpose                                                                                     |
 |---------------------------------|----------|---------------------------------------------------------------------------------------------|
-| `well-formed-v1`                | accept   | Minimal happy path with ASCII domain.                                                       |
+| `well-formed-v1`                | accept   | Minimal happy path with ASCII domain (host-only, empty path).                               |
 | `well-formed-len-18-min`        | accept   | Boundary: minimum well-formed length (18 octets, 1-octet domain).                           |
 | `well-formed-non-ascii-cyrillic`| accept   | Non-ASCII UTF-8 domain (Cyrillic IDN), locks "preserve verbatim" rule.                      |
 | `malformed-len-17`              | reject   | Boundary: total length 17 (zero domain octets).                                             |
@@ -269,6 +331,9 @@ The `secret-format` array contains 11 vectors at v0.1.0:
 | `trailing-extension-len-4`      | accept   | v0.1.0 trailing-extension tolerance (4-octet trailing region; v0.2.0 forward-simulation).   |
 | `trailing-extension-len-16`     | accept   | v0.1.0 trailing-extension tolerance (16-octet trailing region; v0.2.0 forward-simulation).  |
 | `trailing-extension-len-64`     | accept   | v0.1.0 trailing-extension tolerance (64-octet trailing region; v0.2.0 forward-simulation).  |
+| `well-formed-host-and-path`     | accept   | A-003: host with single-segment path (e.g. `example.com/ws/abc123`); locks first-`/` split. |
+| `well-formed-host-and-deep-path`| accept   | A-003: host with multi-segment path; locks "subsequent `/` stay inside path" rule.          |
+| `malformed-leading-slash`       | reject   | A-003: `domain` begins with `/` (no host prefix); locks §2.1 leading-slash MUST rejection.  |
 
 The three `trailing-extension-*` vectors satisfy the AC-2 backup-list
 clause (vectors covering "secret with backup list of N=1/2/3") at
@@ -359,3 +424,35 @@ conformance vectors **MUST NOT** assert `error: "INTERNAL"`.
 is never spec-mandated and never test-asserted. This entry is recorded
 here so that a future contributor reading `t3.h` can see why
 `INTERNAL` is absent from the §2 error catalogue.
+
+### 6.7 Path as a separate URL parameter (rejected)
+
+**Proposal:** carry the upgrade path as a separate URL-level field
+in the `tg://proxy?…` deeplink, e.g.
+`tg://proxy?server=example.com&port=443&secret=ff…&path=/ws/abc123`,
+leaving the secret payload at the v0.1.0 `0xff + key + host` shape.
+
+**Decision (A-003, 2026-04-25):** rejected. Splitting the
+destination across two parsing layers (URL parser + secret parser)
+fragments rotation-detection logic, allows tampering with `path` at
+the URL layer without invalidating the 16-byte key, and does not
+extend cleanly to QR / BLE / paste flows where the secret is the
+atomic unit of trust. Inlining `path` inside `domain` (§1.1) makes
+the secret self-contained: the same byte sequence works across
+every transport.
+
+### 6.8 Length-prefixed path (rejected)
+
+**Proposal:** structure `domain` as
+`<host-utf8> || 0x00 || <path-len:u8> || <path-utf8>`, with an
+explicit zero-octet host terminator and a one-octet path length
+field, instead of the implicit first-`/` split of §1.1.
+
+**Decision (A-003, 2026-04-25):** rejected. The implicit `/` split
+is unambiguous, zero-cost on the wire, and consistent with §6.2's
+prior rejection of an explicit `domain_len` prefix. An explicit
+path-length field would also conflict with §4's
+trailing-extension forward-compat path by fixing the path region
+inside `domain`, leaving no contiguous tail for v0.2.0 extension
+payloads. The implicit split is constant-time to derive and adds
+no parser state.
