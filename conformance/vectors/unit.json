@@ -6,7 +6,13 @@
   },
   "_scaffold_note": "TODO(conformance-v0.1.0): populate per-op vectors. Each section is an array of {id, args, expect} objects, where expect is either {ok: true, result: ...} or {ok: false, error: '<CLASS>'}.",
   "_xfail_pending": "XFAIL-PENDING-1.7: secret-format vectors authored by Story 1.1; runner + xfail materialisation owned by Story 1.7",
-  "_amendment_log": "A-003 (2026-04-25): result schema gained result.host and result.path; existing 11 vectors backfilled (host == domain, path == \"\") and 3 destination-structure vectors appended (well-formed-host-and-path, well-formed-host-and-deep-path, malformed-leading-slash).",
+  "_amendment_log": [
+    {
+      "id": "A-003",
+      "date": "2026-04-25",
+      "summary": "Result schema gained result.host and result.path; existing 11 vectors backfilled (host == domain, path == \"\") and 5 destination-structure vectors appended (well-formed-host-and-path, well-formed-host-and-deep-path, well-formed-idn-host-and-path, well-formed-host-and-trailing-slash, malformed-leading-slash)."
+    }
+  ],
   "secret-format": [
     {
       "id": "well-formed-v1",
@@ -134,6 +140,32 @@
           "domain": "example.com/api/v2/route/x",
           "host": "example.com",
           "path": "/api/v2/route/x"
+        }
+      }
+    },
+    {
+      "id": "well-formed-idn-host-and-path",
+      "args": ["ff55555555555555555555555555555555d0bfd180d0b8d0bcd0b5d1802ed180d1842f70617468"],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "55555555555555555555555555555555",
+          "domain": "пример.рф/path",
+          "host": "пример.рф",
+          "path": "/path"
+        }
+      }
+    },
+    {
+      "id": "well-formed-host-and-trailing-slash",
+      "args": ["ff444444444444444444444444444444446578616d706c652e636f6d2f"],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "44444444444444444444444444444444",
+          "domain": "example.com/",
+          "host": "example.com",
+          "path": "/"
         }
       }
     },

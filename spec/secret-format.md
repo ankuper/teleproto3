@@ -6,6 +6,9 @@ amendment_log:
   - id: A-003
     date: 2026-04-25
     summary: Destination structure — host[/path] split inside domain field (§1.1)
+  - id: A-004
+    date: 2026-04-25
+    summary: Length-silence — no upper bound on domain_len / host_len / path_len (§1.1, §6.3, §6.8)
 ---
 
 > **Normative.** This document defines required behaviour for conforming
@@ -80,6 +83,11 @@ The split is performed on the **first** `0x2f` only. Any further
 `0x2f` octets are part of `path` and are not interpreted further by
 this layer.
 
+A trailing `0x2f` (i.e. `path` consisting solely of the leading
+slash, `path = "/"`) is well-formed and yields a non-empty `path`
+component. The round-trip identity `domain == host || path` (e.g.
+`"example.com/" == "example.com" || "/"`) holds trivially.
+
 The identity `domain == host || path` (octet concatenation) holds
 for every well-formed secret; parsers **MUST** preserve it.
 
@@ -90,11 +98,16 @@ transformation to either field. (See §3 for producer rules; §6.1
 for the deferred normalisation discussion.)
 
 The spec imposes **no upper bound** on `domain_len`, `host_len`, or
-`path_len` beyond the §1 constraint `domain_len ≥ 1`. Length-cap
-proposals are recorded as rejected in §6.3 and §6.8; producers
+`path_len` beyond the §1 constraint `domain_len ≥ 1`. Rejected
+length-related proposals are recorded in §6.3 (length cap, RFC 1035
+253-octet ceiling) and §6.8 (length-prefixed path); producers
 seeking practical guidance for transport-layer limits (URL paste,
 QR encoding, HTTP request line) consult installer / operator docs,
 not this spec.
+
+By construction (§2.1 leading-`0x2f` rejection plus §1's `domain_len
+≥ 1` constraint), `host_len ≥ 1` for every successfully parsed
+secret; `host` is never empty.
 
 The `domain` field is preserved on every parsed result for backward
 compatibility with consumers that read `result.domain`. New
@@ -123,8 +136,10 @@ A conforming parser **MUST**:
   not form a valid UTF-8 sequence (any decoding error: lone
   continuation bytes, truncated multi-byte sequences, invalid lead
   bytes, overlong encodings, or surrogate-range scalar values).
-- Reject with **`MALFORMED`** when `buf[17] == 0x2f` (i.e. `domain`
-  begins with `/` without a host prefix). See §1.1.
+- Reject with **`MALFORMED`** when `D[0] == 0x2f` (equivalently
+  `buf[17] == 0x2f`, once the `len < 18` rule above has passed) —
+  i.e. `domain` begins with `/` without a host prefix. See §1.1
+  for the definition of `D`.
 - On success, populate the opaque `t3_secret_t *out` with the parsed
   key (16 octets), the full `domain` (octet sequence and length),
   and the destination split derived per §1.1: `host` (the `domain`
@@ -202,6 +217,17 @@ When `path` is non-empty, its first octet **MUST** be `0x2f`
 (`/`); producers **MUST NOT** emit a non-empty `path` whose first
 octet is anything other than `0x2f`.
 
+Producers **MUST NOT** emit a `host` containing `0x2f`. The first
+`0x2f` octet in `domain` is reserved as the host/path boundary per
+§1.1; embedding `0x2f` inside `host` would round-trip-collapse to a
+different `(host, path)` pair after parse, violating §3.1.
+
+Producers **MUST NOT** emit an empty `host`. By §1.1's split rule
+plus §2.1's leading-`0x2f` rejection, an empty `host` would force
+`domain` to begin with `0x2f` (when `path` is non-empty) and §2.1
+rejects such buffers as `MALFORMED`. When the source has no host,
+the secret is not well-formed and **MUST NOT** be serialised.
+
 ### 3.1 Round-trip property
 
 For every valid `t3_secret_t s`:
@@ -254,6 +280,22 @@ The signature format, the backup-list wire encoding, peer rotation
 semantics, and the corresponding `extension_blob` activation are
 deferred to v0.2.0 and tracked in §6.
 
+### 4.3 Forward-compatibility constraint on the version marker
+
+Future spec revisions establishing a version marker (per §2.2 / §4.1)
+**MUST NOT** select the octet `0x2f` (ASCII `/`) as the marker value.
+A `0x2f` marker would collide with §1.1's destination-structure split
+rule: v0.1.0 parsers (which have no awareness of the marker) would
+treat the marker octet as the host/path boundary and silently
+misroute requests. This constraint binds the v0.2.0 amendment author
+and is enforced documentary-only at v0.1.0 (no v0.1.0 input can
+exercise it).
+
+The companion rejection of length-prefixed paths in §6.8 is one
+illustration of why the v0.1.0 trailing region must remain
+uncluttered for v0.2.0 evolution; this constraint is the symmetric
+obligation on the v0.2.0 marker selection.
+
 ## 5. Test vectors
 
 This section binds the Type3 secret-format contract to the
@@ -289,10 +331,16 @@ On success (`expect.ok == true`):
 | Field                  | Type     | Required | Description                                                                                  |
 |------------------------|----------|----------|----------------------------------------------------------------------------------------------|
 | `result.key`           | string   | yes      | Exactly 32 lowercase hex characters (16 raw key octets).                                     |
-| `result.domain`        | string   | yes      | UTF-8 string copied verbatim from the parsed domain bytes (no normalisation, no escaping). Equals `host || path` (octet concatenation; see §1.1). Preserved for backward-compat with v0.1.0-draft consumers; new consumers **SHOULD** read `host` and `path`. |
+| `result.domain`        | string   | yes      | UTF-8 string copied verbatim from the parsed domain bytes (no normalisation, no escaping). Equals `host || path` (octet concatenation; see §1.1). Preserved for backward-compat with v0.1.0-draft consumers (see Consumer guidance below). |
 | `result.host`          | string   | yes      | UTF-8 string copied verbatim from the host portion of the domain (octets preceding the first `0x2f`, or the entire domain if no `0x2f` is present). Never empty. See §1.1. |
 | `result.path`          | string   | yes      | UTF-8 string copied verbatim from the path portion of the domain (octets from the first `0x2f` to end-of-buffer inclusive of the leading `/`, or the empty string if no `0x2f` is present). May be empty. See §1.1. |
 | `result.extension_blob`| string   | no       | Lowercase hex of trailing octets after the v0.1.0 layout. Absent at v0.1.0; reserved for v0.2.0. |
+
+**Consumer guidance.** New consumers **SHOULD** read `result.host`
+and `result.path` directly. The `result.domain` field is preserved
+for backward compatibility with v0.1.0-draft consumers written
+before A-003; consumers performing routing decisions on `domain`
+alone will mis-handle the host/path split (§1.1).
 
 On failure (`expect.ok == false`):
 
@@ -315,13 +363,13 @@ the runner.
 
 ### 5.4 Vector inventory
 
-The `secret-format` array contains 14 vectors at v0.1.0 (11 baseline +
-3 destination-structure vectors added by amendment A-003):
+The `secret-format` array contains 16 vectors at v0.1.0 (11 baseline +
+5 destination-structure vectors added by amendment A-003):
 
 | ID                              | Polarity | Purpose                                                                                     |
 |---------------------------------|----------|---------------------------------------------------------------------------------------------|
 | `well-formed-v1`                | accept   | Minimal happy path with ASCII domain (host-only, empty path).                               |
-| `well-formed-len-18-min`        | accept   | Boundary: minimum well-formed length (18 octets, 1-octet domain).                           |
+| `well-formed-len-18-min`        | accept   | Boundary: minimum well-formed length (18 octets, 1-octet domain; host-only, empty path).    |
 | `well-formed-non-ascii-cyrillic`| accept   | Non-ASCII UTF-8 domain (Cyrillic IDN), locks "preserve verbatim" rule.                      |
 | `malformed-len-17`              | reject   | Boundary: total length 17 (zero domain octets).                                             |
 | `malformed-len-zero`            | reject   | Empty buffer.                                                                               |
@@ -333,6 +381,8 @@ The `secret-format` array contains 14 vectors at v0.1.0 (11 baseline +
 | `trailing-extension-len-64`     | accept   | v0.1.0 trailing-extension tolerance (64-octet trailing region; v0.2.0 forward-simulation).  |
 | `well-formed-host-and-path`     | accept   | A-003: host with single-segment path (e.g. `example.com/ws/abc123`); locks first-`/` split. |
 | `well-formed-host-and-deep-path`| accept   | A-003: host with multi-segment path; locks "subsequent `/` stay inside path" rule.          |
+| `well-formed-idn-host-and-path` | accept   | A-003: non-ASCII (Cyrillic IDN) host with path; locks first-`/` split under multi-byte UTF-8.|
+| `well-formed-host-and-trailing-slash` | accept | A-003: trailing `/` (path consisting solely of `/`); locks §1.1 trailing-slash well-formed clarification. |
 | `malformed-leading-slash`       | reject   | A-003: `domain` begins with `/` (no host prefix); locks §2.1 leading-slash MUST rejection.  |
 
 The three `trailing-extension-*` vectors satisfy the AC-2 backup-list
@@ -427,6 +477,7 @@ here so that a future contributor reading `t3.h` can see why
 
 ### 6.7 Path as a separate URL parameter (rejected)
 
+<!-- ban-list-doc: A-003 §6.7 documents a rejected URL-scheme variant; the literal Telegram deeplink scheme is retained for unambiguous reference -->
 **Proposal:** carry the upgrade path as a separate URL-level field
 in the `tg://proxy?…` deeplink, e.g.
 `tg://proxy?server=example.com&port=443&secret=ff…&path=/ws/abc123`,
@@ -440,6 +491,7 @@ extend cleanly to QR / BLE / paste flows where the secret is the
 atomic unit of trust. Inlining `path` inside `domain` (§1.1) makes
 the secret self-contained: the same byte sequence works across
 every transport.
+<!-- /ban-list-doc -->
 
 ### 6.8 Length-prefixed path (rejected)
 
