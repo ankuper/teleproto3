@@ -88,6 +88,16 @@ slash, `path = "/"`) is well-formed and yields a non-empty `path`
 component. The round-trip identity `domain == host || path` (e.g.
 `"example.com/" == "example.com" || "/"`) holds trivially.
 
+The two empty-path-like states are syntactically distinct: `path =
+""` (no `0x2f` octet anywhere in `domain`) and `path = "/"` (a
+single trailing `0x2f`) round-trip to different `domain` octets
+(`"example.com"` vs `"example.com/"`). Routing layers **MUST NOT**
+treat them as equivalent solely because both yield no path
+segments; the canonical secret bytes differ. Consumers that need
+to fold the two cases together for application logic (e.g. routing
+keys) **SHOULD** do so above the parser layer; the parser
+preserves the distinction.
+
 The identity `domain == host || path` (octet concatenation) holds
 for every well-formed secret; parsers **MUST** preserve it.
 
@@ -133,13 +143,16 @@ A conforming parser **MUST**:
 - Reject with **`MALFORMED`** when `len < 18`.
 - Reject with **`MALFORMED`** when `buf[0] != 0xff`.
 - Reject with **`MALFORMED`** when the octets in `buf[17 .. len-1]` do
-  not form a valid UTF-8 sequence (any decoding error: lone
-  continuation bytes, truncated multi-byte sequences, invalid lead
-  bytes, overlong encodings, or surrogate-range scalar values).
-- Reject with **`MALFORMED`** when `D[0] == 0x2f` (equivalently
-  `buf[17] == 0x2f`, once the `len < 18` rule above has passed) —
-  i.e. `domain` begins with `/` without a host prefix. See §1.1
-  for the definition of `D`.
+  not form a valid UTF-8 sequence per RFC 3629 §3. This includes
+  lone continuation bytes, truncated multi-byte sequences, invalid
+  lead bytes, overlong encodings, and the 3-octet sequences in the
+  range `ED A0 80` to `ED BF BF` that encode UTF-16 surrogate code
+  points (U+D800..U+DFFF). UTF-8 itself cannot natively encode
+  surrogate code points; the cited 3-octet range is the CESU-8 /
+  WTF-8 form RFC 3629 §3 forbids.
+- Reject with **`MALFORMED`** when `D[0] == 0x2f` — i.e. `domain`
+  begins with `/` without a host prefix. See §1.1 for the definition
+  of `D`.
 - On success, populate the opaque `t3_secret_t *out` with the parsed
   key (16 octets), the full `domain` (octet sequence and length),
   and the destination split derived per §1.1: `host` (the `domain`
@@ -287,9 +300,9 @@ Future spec revisions establishing a version marker (per §2.2 / §4.1)
 A `0x2f` marker would collide with §1.1's destination-structure split
 rule: v0.1.0 parsers (which have no awareness of the marker) would
 treat the marker octet as the host/path boundary and silently
-misroute requests. This constraint binds the v0.2.0 amendment author
-and is enforced documentary-only at v0.1.0 (no v0.1.0 input can
-exercise it).
+misroute requests. This constraint is an obligation on the future
+v0.2.0+ amendment author at marker-selection time; v0.1.0
+implementations cannot enforce it and are not expected to.
 
 The companion rejection of length-prefixed paths in §6.8 is one
 illustration of why the v0.1.0 trailing region must remain
@@ -339,8 +352,12 @@ On success (`expect.ok == true`):
 **Consumer guidance.** New consumers **SHOULD** read `result.host`
 and `result.path` directly. The `result.domain` field is preserved
 for backward compatibility with v0.1.0-draft consumers written
-before A-003; consumers performing routing decisions on `domain`
-alone will mis-handle the host/path split (§1.1).
+before A-003. Consumers that route, validate, or display `domain`
+without splitting on the first `0x2f` may mis-attribute path bytes
+to host (e.g. mis-targeted SNI, mis-scoped certificate validation,
+mis-rendered host UI); the failure mode is consumer-specific and
+depends on which downstream layer consumes `domain` directly. See
+§1.1 for the split contract.
 
 On failure (`expect.ok == false`):
 
@@ -379,11 +396,11 @@ The `secret-format` array contains 16 vectors at v0.1.0 (11 baseline +
 | `trailing-extension-len-4`      | accept   | v0.1.0 trailing-extension tolerance (4-octet trailing region; v0.2.0 forward-simulation).   |
 | `trailing-extension-len-16`     | accept   | v0.1.0 trailing-extension tolerance (16-octet trailing region; v0.2.0 forward-simulation).  |
 | `trailing-extension-len-64`     | accept   | v0.1.0 trailing-extension tolerance (64-octet trailing region; v0.2.0 forward-simulation).  |
-| `well-formed-host-and-path`     | accept   | A-003: host with single-segment path (e.g. `example.com/ws/abc123`); locks first-`/` split. |
-| `well-formed-host-and-deep-path`| accept   | A-003: host with multi-segment path; locks "subsequent `/` stay inside path" rule.          |
-| `well-formed-idn-host-and-path` | accept   | A-003: non-ASCII (Cyrillic IDN) host with path; locks first-`/` split under multi-byte UTF-8.|
-| `well-formed-host-and-trailing-slash` | accept | A-003: trailing `/` (path consisting solely of `/`); locks §1.1 trailing-slash well-formed clarification. |
-| `malformed-leading-slash`       | reject   | A-003: `domain` begins with `/` (no host prefix); locks §2.1 leading-slash MUST rejection.  |
+| `well-formed-host-and-path`           | accept | A-003: host with single-segment path (e.g. `example.com/ws/abc123`); locks first-`/` split.                |
+| `well-formed-host-and-deep-path`      | accept | A-003: host with multi-segment path; locks "subsequent `/` stay inside path" rule.                         |
+| `well-formed-idn-host-and-path`       | accept | A-003 (review fold-in P-8): non-ASCII (Cyrillic IDN) host with path; locks first-`/` under multi-byte UTF-8.|
+| `well-formed-host-and-trailing-slash` | accept | A-003 (review fold-in P-14): trailing `/` (path consisting solely of `/`); locks §1.1 trailing-slash rule. |
+| `malformed-leading-slash`             | reject | A-003: `domain` begins with `/` (no host prefix); locks §2.1 leading-slash MUST rejection.                 |
 
 The three `trailing-extension-*` vectors satisfy the AC-2 backup-list
 clause (vectors covering "secret with backup list of N=1/2/3") at
@@ -477,11 +494,31 @@ here so that a future contributor reading `t3.h` can see why
 
 ### 6.7 Path as a separate URL parameter (rejected)
 
+<!--
+  ban-list-doc sentinel (Story 1.1 / A-003): the enclosed prose
+  documents a rejected URL-scheme variant. The literal Telegram
+  deeplink scheme inside this block contains the AR-C1 ban-list
+  token "proxy" by necessity (it is the historical name of the
+  v1 scheme); the sentinel signals AR-C1 banlist tooling (owned by
+  Story 1.4) to treat hits between the opening and closing markers
+  as documentary, not user-facing copy. Format (case-sensitive):
+
+    <!-- ban-list-doc: <reason> -->
+    ...prose containing banned token...
+    <!-- /ban-list-doc -->
+
+  The opening marker MUST start with the literal "ban-list-doc:"
+  and the closing marker MUST be exactly "/ban-list-doc". Story
+  1.4 will codify this contract in the linter.
+-->
 <!-- ban-list-doc: A-003 §6.7 documents a rejected URL-scheme variant; the literal Telegram deeplink scheme is retained for unambiguous reference -->
 **Proposal:** carry the upgrade path as a separate URL-level field
 in the `tg://proxy?…` deeplink, e.g.
-`tg://proxy?server=example.com&port=443&secret=ff…&path=/ws/abc123`,
+`tg://proxy?server=example.com&port=443&secret=<HEX_SECRET>&path=/ws/abc123`,
 leaving the secret payload at the v0.1.0 `0xff + key + host` shape.
+(`<HEX_SECRET>` is a placeholder for the lowercase-hex Type3 secret;
+it is not part of the example and **MUST NOT** be interpreted as a
+literal value.)
 
 **Decision (A-003, 2026-04-25):** rejected. Splitting the
 destination across two parsing layers (URL parser + secret parser)

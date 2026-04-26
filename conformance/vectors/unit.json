@@ -10,7 +10,12 @@
     {
       "id": "A-003",
       "date": "2026-04-25",
-      "summary": "Result schema gained result.host and result.path; existing 11 vectors backfilled (host == domain, path == \"\") and 5 destination-structure vectors appended (well-formed-host-and-path, well-formed-host-and-deep-path, well-formed-idn-host-and-path, well-formed-host-and-trailing-slash, malformed-leading-slash)."
+      "summary": "Result schema gained result.host and result.path; existing 11 vectors backfilled (host == domain, path == \"\") and 3 destination-structure vectors appended by the architect amendment (well-formed-host-and-path, well-formed-host-and-deep-path, malformed-leading-slash)."
+    },
+    {
+      "id": "A-003-review-fold-in",
+      "date": "2026-04-25",
+      "summary": "Post-A-003 adversarial re-review fold-in. 2 destination-structure vectors appended: well-formed-idn-host-and-path (P-8 — IDN host + path, locks first-0x2f split under multi-byte UTF-8) and well-formed-host-and-trailing-slash (P-14 — path consisting solely of leading slash). Final secret-format inventory: 16 vectors (11 baseline + 3 by A-003 + 2 by review fold-in)."
     }
   ],
   "secret-format": [
@@ -145,11 +150,11 @@
     },
     {
       "id": "well-formed-idn-host-and-path",
-      "args": ["ff55555555555555555555555555555555d0bfd180d0b8d0bcd0b5d1802ed180d1842f70617468"],
+      "args": ["ff33333333333333333333333333333333d0bfd180d0b8d0bcd0b5d1802ed180d1842f70617468"],
       "expect": {
         "ok": true,
         "result": {
-          "key": "55555555555555555555555555555555",
+          "key": "33333333333333333333333333333333",
           "domain": "пример.рф/path",
           "host": "пример.рф",
           "path": "/path"
@@ -171,7 +176,7 @@
     },
     {
       "id": "malformed-leading-slash",
-      "args": ["ff333333333333333333333333333333332f6f6e6c7970617468"],
+      "args": ["ff555555555555555555555555555555552f6f6e6c7970617468"],
       "expect": { "ok": false, "error": "MALFORMED" }
     }
   ],
