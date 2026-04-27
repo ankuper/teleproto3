@@ -2,7 +2,7 @@
   "$schema_version": "1.0",
   "pinned": {
     "spec": "spec-v0.1.0-draft",
-    "lib":  "lib-v0.1.0-draft"
+    "lib": "lib-v0.1.0-draft"
   },
   "_scaffold_note": "TODO(conformance-v0.1.0): populate per-op vectors. Each section is an array of {id, args, expect} objects, where expect is either {ok: true, result: ...} or {ok: false, error: '<CLASS>'}.",
   "_xfail_pending": "XFAIL-PENDING-1.7: secret-format vectors authored by Story 1.1; runner + xfail materialisation owned by Story 1.7",
@@ -10,18 +10,66 @@
     {
       "id": "A-003",
       "date": "2026-04-25",
-      "summary": "Result schema gained result.host and result.path; existing 11 vectors backfilled (host == domain, path == \"\") and 3 destination-structure vectors appended by the architect amendment (well-formed-host-and-path, well-formed-host-and-deep-path, malformed-leading-slash)."
+      "deltas": [
+        "well-formed-host-and-path (accept, host + path split on first 0x2f — A-003 baseline)",
+        "well-formed-host-and-deep-path (accept, multi-segment path — A-003 baseline)",
+        "malformed-leading-slash (reject, domain begins with 0x2f — A-003 baseline)",
+        "well-formed-idn-host-and-path (accept, IDN host + path under multi-byte UTF-8 — A-003 review fold-in)",
+        "well-formed-host-and-trailing-slash (accept, path consisting solely of leading slash — A-003 review fold-in)"
+      ],
+      "summary": "Destination structure — host[/path] split inside domain field (§1.1). Includes post-A-003 adversarial re-review fold-in (2 additional vectors)."
     },
     {
-      "id": "A-003-review-fold-in",
-      "date": "2026-04-25",
-      "summary": "Post-A-003 adversarial re-review fold-in. 2 destination-structure vectors appended: well-formed-idn-host-and-path (P-8 — IDN host + path, locks first-0x2f split under multi-byte UTF-8) and well-formed-host-and-trailing-slash (P-14 — path consisting solely of leading slash). Final secret-format inventory: 16 vectors (11 baseline + 3 by A-003 + 2 by review fold-in)."
+      "id": "A-005",
+      "date": "2026-04-26",
+      "deltas": [
+        "well-formed-domain-512 (accept, 512-byte domain — A-005 accept boundary)",
+        "malformed-domain-513 (reject, 513-byte domain — A-005 reject boundary)",
+        "malformed-domain-overlong-utf8-c0af (reject, overlong C0 AF — Round-6 H3)",
+        "malformed-domain-overlong-utf8-e0-80-80 (reject, overlong E0 80 80 — Round-6 H3)",
+        "malformed-domain-cesu8-surrogate (reject, CESU-8 ED A0 80 — Round-6 H3)",
+        "well-formed-host-with-tld-suffix (accept, long ASCII host with .ext TLD suffix — Round-7 P-1 rename of forward-compat-recognised-marker-tolerance)",
+        "well-formed-domain-510-host-and-2-path (accept, A-005 boundary with path split — Round-7 P-12)",
+        "malformed-domain-utf8-truncated-at-512-boundary (reject, A-005 + §2.1 rule 5 — Round-7 P-13)",
+        "well-formed-host-and-utf8-path (accept, multi-byte UTF-8 path — Round-7 P-14)"
+      ],
+      "summary": "Domain-field upper bound 512 bytes (host + '/' + path total) — partial walkback of A-004 for DoS prevention. Includes Round-7 review fold-in (3 additional vectors). Inventory at A-005 close: 25 vectors (extended to 31 by A-006)."
+    },
+    {
+      "id": "A-006",
+      "date": "2026-04-27",
+      "deltas": [
+        "malformed-domain-control-byte (reject, embedded 0x0A in domain — Round-8 P-6, §2.1 rule 6)",
+        "well-formed-host-and-double-slash-path (accept, host + //x — Round-8 P-8)",
+        "well-formed-host-and-dot-path (accept, host + /. — Round-8 P-8)",
+        "well-formed-host-and-dot-dot-path (accept, host + /.. — Round-8 P-8)",
+        "malformed-domain-utf8-mid-host (reject, C0 AF mid-host — Round-8 P-15, §2.1 rule 5 at non-zero offset)",
+        "well-formed-domain-511-host-and-trailing-slash (accept, 511-octet host + / = 512-byte boundary — Round-8 P-16, A-005 × trailing-slash)"
+      ],
+      "summary": "Round-8 review fold-in (2026-04-27): §2.1 MALFORMED rule 6 added (reject C0 control / DEL octets — wire-layer HTTP-injection guard); 6 vectors added (1 control-byte reject, 3 path-coverage accepts, 1 mid-host UTF-8 reject, 1 511-byte boundary trailing-slash accept). Final secret-format inventory: 31 vectors."
+    },
+    {
+      "id": "W-001",
+      "date": "2026-04-27",
+      "deltas": [
+        "session-header: flags-le-byte-order → flags-low-byte-set-rejected (rename, Round-8 R8-4)",
+        "session-header: flags-le-high-byte → flags-high-byte-set-rejected (rename, Round-8 R8-4)",
+        "session-header: fragmented-header-incomplete-eof (reject, EOF mid-reassembly — Round-8 H4)",
+        "session-header: fragmented-header-zero-frames (reject, immediate EOF — Round-8 H4)",
+        "session-header: zero-length-payload-idle-session (accept, idle session per §4.3 — Round-8 M3)",
+        "session-header: unknown-command-type-mid-range (reject, cmd 0x42 at v1 — Round-8 R8-6)",
+        "session-header: unknown-command-type-future-version (UNSUPPORTED_VERSION, cmd 0x02 at v0x02 — Round-8 D3 future-recognised)",
+        "obfuscated-handshake (new section, 5 KDF KAT vectors): kdf-tag-eeeeeeee, kdf-tag-dddddddd, kdf-tag-efefefef, kdf-tag-mismatch, kdf-symmetry-roundtrip"
+      ],
+      "summary": "Wire-format §4 normative landing — KDF formulae inline, magic-tag admission gate, EOF-during-fragmentation contract, idle-session accept, (cmd,version) dispatch coverage. session-header inventory 11 → 16; new obfuscated-handshake section: 5 vectors."
     }
   ],
   "secret-format": [
     {
       "id": "well-formed-v1",
-      "args": ["ff000102030405060708090a0b0c0d0e0f6578616d706c652e636f6d"],
+      "args": [
+        "ff000102030405060708090a0b0c0d0e0f6578616d706c652e636f6d"
+      ],
       "expect": {
         "ok": true,
         "result": {
@@ -34,7 +82,9 @@
     },
     {
       "id": "well-formed-len-18-min",
-      "args": ["ff00112233445566778899aabbccddeeff61"],
+      "args": [
+        "ff00112233445566778899aabbccddeeff61"
+      ],
       "expect": {
         "ok": true,
         "result": {
@@ -46,8 +96,10 @@
       }
     },
     {
-      "id": "well-formed-non-ascii-cyrillic",
-      "args": ["ffaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad0bfd180d0b8d0bcd0b5d1802ed180d184"],
+      "id": "well-formed-idn-host-only",
+      "args": [
+        "ffaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaad0bfd180d0b8d0bcd0b5d1802ed180d184"
+      ],
       "expect": {
         "ok": true,
         "result": {
@@ -60,32 +112,59 @@
     },
     {
       "id": "malformed-len-17",
-      "args": ["ff000102030405060708090a0b0c0d0e0f"],
-      "expect": { "ok": false, "error": "MALFORMED" }
+      "args": [
+        "ff000102030405060708090a0b0c0d0e0f"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
     },
     {
       "id": "malformed-len-zero",
-      "args": [""],
-      "expect": { "ok": false, "error": "MALFORMED" }
+      "args": [
+        ""
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
     },
     {
       "id": "malformed-prefix-fe",
-      "args": ["fe000102030405060708090a0b0c0d0e0f6578616d706c652e636f6d"],
-      "expect": { "ok": false, "error": "MALFORMED" }
+      "args": [
+        "fe000102030405060708090a0b0c0d0e0f6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
     },
     {
       "id": "malformed-domain-bad-utf8",
-      "args": ["ff000102030405060708090a0b0c0d0e0f80"],
-      "expect": { "ok": false, "error": "MALFORMED" }
+      "args": [
+        "ff000102030405060708090a0b0c0d0e0f80"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
     },
     {
       "id": "malformed-domain-truncated-utf8",
-      "args": ["ff000102030405060708090a0b0c0d0e0fc3"],
-      "expect": { "ok": false, "error": "MALFORMED" }
+      "args": [
+        "ff000102030405060708090a0b0c0d0e0fc3"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
     },
     {
       "id": "trailing-extension-len-4",
-      "args": ["ff0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a6578616d706c652e636f6d2e626b31"],
+      "args": [
+        "ff0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a6578616d706c652e636f6d2e626b31"
+      ],
       "expect": {
         "ok": true,
         "result": {
@@ -98,7 +177,9 @@
     },
     {
       "id": "trailing-extension-len-16",
-      "args": ["ff0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b6578616d706c652e636f6d2e626b312e626b322e626b332e626b34"],
+      "args": [
+        "ff0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b6578616d706c652e636f6d2e626b312e626b322e626b332e626b34"
+      ],
       "expect": {
         "ok": true,
         "result": {
@@ -111,7 +192,9 @@
     },
     {
       "id": "trailing-extension-len-64",
-      "args": ["ff0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c6578616d706c652e636f6d2e626b312e626b322e626b332e626b342e626b312e626b322e626b332e626b342e626b312e626b322e626b332e626b342e626b312e626b322e626b332e626b34"],
+      "args": [
+        "ff0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c6578616d706c652e636f6d2e626b312e626b322e626b332e626b342e626b312e626b322e626b332e626b342e626b312e626b322e626b332e626b342e626b312e626b322e626b332e626b34"
+      ],
       "expect": {
         "ok": true,
         "result": {
@@ -124,7 +207,9 @@
     },
     {
       "id": "well-formed-host-and-path",
-      "args": ["ff111111111111111111111111111111116578616d706c652e636f6d2f77732f616263313233"],
+      "args": [
+        "ff111111111111111111111111111111116578616d706c652e636f6d2f77732f616263313233"
+      ],
       "expect": {
         "ok": true,
         "result": {
@@ -137,7 +222,9 @@
     },
     {
       "id": "well-formed-host-and-deep-path",
-      "args": ["ff222222222222222222222222222222226578616d706c652e636f6d2f6170692f76322f726f7574652f78"],
+      "args": [
+        "ff222222222222222222222222222222226578616d706c652e636f6d2f6170692f76322f726f7574652f78"
+      ],
       "expect": {
         "ok": true,
         "result": {
@@ -150,7 +237,9 @@
     },
     {
       "id": "well-formed-idn-host-and-path",
-      "args": ["ff33333333333333333333333333333333d0bfd180d0b8d0bcd0b5d1802ed180d1842f70617468"],
+      "args": [
+        "ff33333333333333333333333333333333d0bfd180d0b8d0bcd0b5d1802ed180d1842f70617468"
+      ],
       "expect": {
         "ok": true,
         "result": {
@@ -163,7 +252,9 @@
     },
     {
       "id": "well-formed-host-and-trailing-slash",
-      "args": ["ff444444444444444444444444444444446578616d706c652e636f6d2f"],
+      "args": [
+        "ff444444444444444444444444444444446578616d706c652e636f6d2f"
+      ],
       "expect": {
         "ok": true,
         "result": {
@@ -176,11 +267,465 @@
     },
     {
       "id": "malformed-leading-slash",
-      "args": ["ff555555555555555555555555555555552f6f6e6c7970617468"],
-      "expect": { "ok": false, "error": "MALFORMED" }
+      "args": [
+        "ff555555555555555555555555555555552f6f6e6c7970617468"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "malformed-domain-overlong-utf8-c0af",
+      "args": [
+        "ff61616161616161616161616161616161c0af"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "malformed-domain-overlong-utf8-e0-80-80",
+      "args": [
+        "ff61616161616161616161616161616161e08080"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "malformed-domain-cesu8-surrogate",
+      "args": [
+        "ff61616161616161616161616161616161eda080"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "well-formed-domain-512",
+      "args": [
+        "ffeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "domain": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "path": ""
+        }
+      }
+    },
+    {
+      "id": "malformed-domain-513",
+      "args": [
+        "fffefefefefefefefefefefefefefefefe616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "well-formed-host-with-tld-suffix",
+      "args": [
+        "ff777777777777777777777777777777776578616d706c652e636f6d2e657874"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "77777777777777777777777777777777",
+          "domain": "example.com.ext",
+          "host": "example.com.ext",
+          "path": ""
+        }
+      }
+    },
+    {
+      "id": "well-formed-domain-510-host-and-2-path",
+      "args": [
+        "ffbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612f62"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "domain": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/b",
+          "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "path": "/b"
+        }
+      }
+    },
+    {
+      "id": "malformed-domain-utf8-truncated-at-512-boundary",
+      "args": [
+        "ffcccccccccccccccccccccccccccccccc616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161f09f92"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "well-formed-host-and-utf8-path",
+      "args": [
+        "ffdddddddddddddddddddddddddddddddd6578616d706c652e636f6d2fcf80e6b189f09f92a9"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "dddddddddddddddddddddddddddddddd",
+          "domain": "example.com/π汉💩",
+          "host": "example.com",
+          "path": "/π汉💩"
+        }
+      }
+    },
+    {
+      "id": "malformed-domain-control-byte",
+      "args": [
+        "ffeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee6578616d700a6c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "well-formed-host-and-double-slash-path",
+      "args": [
+        "ff121212121212121212121212121212126578616d706c652e636f6d2f2f78"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "12121212121212121212121212121212",
+          "domain": "example.com//x",
+          "host": "example.com",
+          "path": "//x"
+        }
+      }
+    },
+    {
+      "id": "well-formed-host-and-dot-path",
+      "args": [
+        "ff131313131313131313131313131313136578616d706c652e636f6d2f2e"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "13131313131313131313131313131313",
+          "domain": "example.com/.",
+          "host": "example.com",
+          "path": "/."
+        }
+      }
+    },
+    {
+      "id": "well-formed-host-and-dot-dot-path",
+      "args": [
+        "ff141414141414141414141414141414146578616d706c652e636f6d2f2e2e"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "14141414141414141414141414141414",
+          "domain": "example.com/..",
+          "host": "example.com",
+          "path": "/.."
+        }
+      }
+    },
+    {
+      "id": "malformed-domain-utf8-mid-host",
+      "args": [
+        "ff151515151515151515151515151515156578616d706c652e636f6dc0af78797a"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "well-formed-domain-511-host-and-trailing-slash",
+      "args": [
+        "ff16161616161616161616161616161616616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612f"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "key": "16161616161616161616161616161616",
+          "domain": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/",
+          "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "path": "/"
+        }
+      }
     }
   ],
-  "session-header": [],
-  "obfuscated2": [],
+  "session-header": [
+    {
+      "id": "well-formed-v1",
+      "args": [
+        "01010000"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "command_type": 1,
+          "version": 1,
+          "flags": 0
+        }
+      }
+    },
+    {
+      "id": "flags-low-byte-set-rejected",
+      "args": [
+        "01010100"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "flags-high-byte-set-rejected",
+      "args": [
+        "01010001"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "version-skew-forward",
+      "args": [
+        "01020000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "UNSUPPORTED_VERSION"
+      }
+    },
+    {
+      "id": "unknown-command-type",
+      "args": [
+        "02010000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "command-type-zero",
+      "args": [
+        "00010000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "command-type-sentinel",
+      "args": [
+        "ff010000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "version-zero",
+      "args": [
+        "01000000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "fragmented-header-2-frames",
+      "args": [
+        "0101",
+        "0000"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "command_type": 1,
+          "version": 1,
+          "flags": 0
+        }
+      }
+    },
+    {
+      "id": "fragmented-header-4-frames",
+      "args": [
+        "01",
+        "01",
+        "00",
+        "00"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "command_type": 1,
+          "version": 1,
+          "flags": 0
+        }
+      }
+    },
+    {
+      "id": "truncated-header",
+      "args": [
+        "010100"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "fragmented-header-incomplete-eof",
+      "args": [
+        "01",
+        "01"
+      ],
+      "_note": "Two frames totalling 2 bytes followed by EOF; parser MUST treat partial header as MALFORMED (Round-8 H4).",
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "fragmented-header-zero-frames",
+      "args": [],
+      "_note": "Zero frames — immediate EOF before any header bytes; MUST be treated as MALFORMED (Round-8 H4).",
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "zero-length-payload-idle-session",
+      "args": [
+        "01010000"
+      ],
+      "_note": "Session Header followed by zero obfuscated payload bytes — well-formed idle session per §4.3 (Round-8 M3).",
+      "expect": {
+        "ok": true,
+        "result": {
+          "command_type": 1,
+          "version": 1,
+          "flags": 0
+        }
+      }
+    },
+    {
+      "id": "unknown-command-type-mid-range",
+      "args": [
+        "42010000"
+      ],
+      "_note": "Mid-range unallocated cmd 0x42 at known v1 — MALFORMED per §3 dispatch table (Round-8 R8-6).",
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "unknown-command-type-future-version",
+      "args": [
+        "02020000"
+      ],
+      "_note": "Unknown cmd 0x02 at unknown version 0x02 — UNSUPPORTED_VERSION per §3 dispatch table 'future-recognised' row (Round-8 D3).",
+      "expect": {
+        "ok": false,
+        "error": "UNSUPPORTED_VERSION"
+      }
+    }
+  ],
+  "obfuscated-handshake": [
+    {
+      "id": "kdf-tag-eeeeeeee",
+      "_note": "KDF KAT — synthesised (random_header, secret) pair where decrypted random_header[56..60) = 0xeeeeeeee (medium mode). Args carry random_header (64 bytes) and secret (16 bytes) hex-concatenated; runner derives keys per §4.2 and asserts the magic tag.",
+      "args": [
+        "TODO-KAT-RANDOM-HEADER-64-BYTES",
+        "TODO-KAT-SECRET-16-BYTES"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "magic_tag": "eeeeeeee",
+          "mode": "medium"
+        }
+      }
+    },
+    {
+      "id": "kdf-tag-dddddddd",
+      "_note": "KDF KAT — magic tag 0xdddddddd (medium+pad mode).",
+      "args": [
+        "TODO-KAT-RANDOM-HEADER-64-BYTES",
+        "TODO-KAT-SECRET-16-BYTES"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "magic_tag": "dddddddd",
+          "mode": "medium-pad"
+        }
+      }
+    },
+    {
+      "id": "kdf-tag-efefefef",
+      "_note": "KDF KAT — magic tag 0xefefefef (compact mode).",
+      "args": [
+        "TODO-KAT-RANDOM-HEADER-64-BYTES",
+        "TODO-KAT-SECRET-16-BYTES"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "magic_tag": "efefefef",
+          "mode": "compact"
+        }
+      }
+    },
+    {
+      "id": "kdf-tag-mismatch",
+      "_note": "KDF KAT — decrypted random_header[56..60) = 0xcafebabe (not in admission set); silent-close gate per §4.2.",
+      "args": [
+        "TODO-KAT-RANDOM-HEADER-64-BYTES",
+        "TODO-KAT-SECRET-16-BYTES"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "kdf-symmetry-roundtrip",
+      "_note": "KDF KAT — client encrypts a payload with (write_key, write_iv); server decrypts with server-derived (read_key, read_iv); assert byte-identity of the plaintext (transitively exercises §4.2 derivation + §4.1 invariants 1, 2, 4 via end-to-end CTR bytestream).",
+      "args": [
+        "TODO-KAT-RANDOM-HEADER-64-BYTES",
+        "TODO-KAT-SECRET-16-BYTES",
+        "TODO-KAT-PLAINTEXT-N-BYTES",
+        "TODO-KAT-CIPHERTEXT-N-BYTES"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "roundtrip": "byte-identical"
+        }
+      }
+    }
+  ],
   "url-parser": []
 }

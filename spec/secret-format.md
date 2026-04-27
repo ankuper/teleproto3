@@ -1,6 +1,6 @@
 ---
 spec_version: 0.1.0-draft
-last_updated: 2026-04-25
+last_updated: 2026-04-26
 status: draft
 amendment_log:
   - id: A-003
@@ -9,6 +9,12 @@ amendment_log:
   - id: A-004
     date: 2026-04-25
     summary: Length-silence — no upper bound on domain_len / host_len / path_len (§1.1, §6.3, §6.8)
+  - id: A-005
+    date: 2026-04-26
+    summary: Domain-field upper bound 512 bytes (host + '/' + path total) — partial walkback of A-004 for DoS prevention
+  - id: A-006
+    date: 2026-04-27
+    summary: Round-8 review fold-in — §2.1 MALFORMED rule 6 (reject C0 control / DEL octets) closes wire-layer HTTP-injection surface; coverage gap vectors for `//`, `/.`, `/..`, mid-host UTF-8, 511-byte boundary
 ---
 
 > **Normative.** This document defines required behaviour for conforming
@@ -60,6 +66,12 @@ domain bytes verbatim (see §2).
 
 `domain_len` is derived from the buffer length: `domain_len = total_len
 - 17`. There is no separate length field. There is no terminator.
+This identity is computed only after §2.1 rule 1 is satisfied (i.e.,
+after `len ≥ 18` has been verified); parsers **MUST NOT** compute it
+before that point. After rule 1 is satisfied the subtraction
+`total_len - 17` is well-defined for any `total_len ≥ 18`; rule 3
+(`domain_len ≤ 512`) then rejects any `domain_len > 512`. No separate
+overflow guard is required.
 
 The result-shape contract for a successfully parsed secret is fixed
 in §5; downstream sections cite §5 for vector schema.
@@ -107,13 +119,18 @@ case-folding, NFC/NFD/IDNA normalisation, or any other
 transformation to either field. (See §3 for producer rules; §6.1
 for the deferred normalisation discussion.)
 
-The spec imposes **no upper bound** on `domain_len`, `host_len`, or
-`path_len` beyond the §1 constraint `domain_len ≥ 1`. Rejected
-length-related proposals are recorded in §6.3 (length cap, RFC 1035
-253-octet ceiling) and §6.8 (length-prefixed path); producers
-seeking practical guidance for transport-layer limits (URL paste,
-QR encoding, HTTP request line) consult installer / operator docs,
-not this spec.
+**Amendment A-005 (2026-04-26)** imposes a normative ceiling:
+`domain_len ≤ 512` bytes (§2.1 MALFORMED rule 3). `host_len` and
+`path_len` are implicitly bounded by this ceiling. Earlier amendment
+A-004 stated the spec was length-silent; A-005 partially walks back
+that position for DoS-prevention. Rejected length-related proposals
+are recorded in §6.3 (length cap, RFC 1035 253-octet ceiling — the
+253-octet cap is rejected, but 512 bytes is now normative) and §6.8
+(length-prefixed path — rejected, implicit ceiling instead). Producers
+seeking guidance on transport-layer limits beyond 512 bytes (URL paste,
+QR encoding, HTTP request line) should treat 512 bytes as the
+deployable ceiling; secrets exceeding it are conformant only if
+transported over channels that do not impose lower limits.
 
 By construction (§2.1 leading-`0x2f` rejection plus §1's `domain_len
 ≥ 1` constraint), `host_len ≥ 1` for every successfully parsed
@@ -138,28 +155,18 @@ header is normative for signature.
 
 ### 2.1 Acceptance and rejection rules
 
-A conforming parser **MUST**:
+**Validation order (NORMATIVE).** A conforming parser **MUST** evaluate
+the checks in the order listed below. The first violated check
+determines the returned error class; subsequent checks are not
+performed.
 
-- Reject with **`MALFORMED`** when `len < 18`.
-- Reject with **`MALFORMED`** when `buf[0] != 0xff`.
-- Reject with **`MALFORMED`** when the octets in `buf[17 .. len-1]` do
-  not form a valid UTF-8 sequence per RFC 3629 §3. This includes
-  lone continuation bytes, truncated multi-byte sequences, invalid
-  lead bytes, overlong encodings, and the 3-octet sequences in the
-  range `ED A0 80` to `ED BF BF` that encode UTF-16 surrogate code
-  points (U+D800..U+DFFF). UTF-8 itself cannot natively encode
-  surrogate code points; the cited 3-octet range is the CESU-8 /
-  WTF-8 form RFC 3629 §3 forbids.
-- Reject with **`MALFORMED`** when `D[0] == 0x2f` — i.e. `domain`
-  begins with `/` without a host prefix. See §1.1 for the definition
-  of `D`.
-- On success, populate the opaque `t3_secret_t *out` with the parsed
-  key (16 octets), the full `domain` (octet sequence and length),
-  and the destination split derived per §1.1: `host` (the `domain`
-  octets preceding the first `0x2f`, or the entire `domain` if none
-  is present) and `path` (the `domain` octets from the first `0x2f`
-  to end-of-buffer, or the empty octet sequence if no `0x2f` is
-  present).
+1. **INVALID_ARG checks** — NULL pointer conditions (see INVALID_ARG
+   rejection rules below).
+2. **MALFORMED checks** — length, marker, domain ceiling (A-005),
+   leading-slash, and UTF-8 well-formedness (see MALFORMED rejection
+   rules below).
+
+#### INVALID_ARG rejection rules
 
 A conforming parser **MUST**:
 
@@ -167,6 +174,47 @@ A conforming parser **MUST**:
 - Reject with **`INVALID_ARG`** when `buf == NULL` and `len > 0`.
   (`buf == NULL && len == 0` is treated as a zero-length input and
   rejected with `MALFORMED`, not `INVALID_ARG`.)
+
+#### MALFORMED rejection rules
+
+A conforming parser **MUST** evaluate the following checks in order;
+the first that fires determines the `MALFORMED` result:
+
+1. Reject with **`MALFORMED`** when `len < 18`.
+2. Reject with **`MALFORMED`** when `buf[0] != 0xff`.
+3. Reject with **`MALFORMED`** when `domain_len > 512`
+   (i.e. `len - 17 > 512`). The 512-byte ceiling applies to the
+   entire `domain` field; `host_len` and `path_len` are implicitly
+   bounded by it. (Amendment A-005, 2026-04-26.)
+4. Reject with **`MALFORMED`** when `D[0] == 0x2f` — i.e. `domain`
+   begins with `/` without a host prefix. See §1.1 for the definition
+   of `D`.
+5. Reject with **`MALFORMED`** when the octets in `buf[17 .. len-1]`
+   do not form a valid UTF-8 sequence per RFC 3629 §3. This includes
+   lone continuation bytes, truncated multi-byte sequences, invalid
+   lead bytes, overlong encodings of any length (e.g. `C0 AF` for
+   U+002F, `E0 80 80` for U+0000, `F0 80 80 80` for U+0000), scalars
+   greater than U+10FFFF (e.g. `F4 90 80 80` for U+110000), and the
+   3-octet sequences in the range `ED A0 80` through `ED BF BF` —
+   CESU-8 / WTF-8 sequences that encode surrogate code points
+   U+D800..U+DFFF; these are not valid UTF-8 per RFC 3629 §3 even
+   though they are well-formed in the named encodings.
+6. Reject with **`MALFORMED`** when any octet in `buf[17 .. len-1]`
+   is in the range `0x00..0x1F` or equals `0x7F` (ASCII C0 control
+   characters and DEL). Rationale: downstream wire layers
+   (`spec/wire-format.md` §1) embed the parsed `host[/path]` verbatim
+   into HTTP request lines, and an embedded CR/LF/NUL would create a
+   request-smuggling injection surface. This rule fires after rule 5
+   (UTF-8 well-formedness), since the targeted octets are themselves
+   valid UTF-8 single-byte scalars.
+
+On success, populate the opaque `t3_secret_t *out` with the parsed
+key (16 octets), the full `domain` (octet sequence and length),
+and the destination split derived per §1.1: `host` (the `domain`
+octets preceding the first `0x2f`, or the entire `domain` if none
+is present) and `path` (the `domain` octets from the first `0x2f`
+to end-of-buffer, or the empty octet sequence if no `0x2f` is
+present).
 
 A conforming parser **MUST NOT**:
 
@@ -205,9 +253,15 @@ future-version marker is established, is governed normatively by §4.
 
 §4 introduces:
 
-- **`UNSUPPORTED_VERSION`** — emitted only after a future-version
-  marker is established and a v0.1.0 parser encounters it. Not
-  reachable from any v0.1.0 input.
+- **`UNSUPPORTED_VERSION`** — emitted **only** when a parser encounters
+  an **unrecognised** future-version marker (a marker not yet allocated
+  by any released spec version). Recognised future-version markers fall
+  under §4.1 v0.1.0 parser obligations (MUST accept / tolerate trailing
+  octets): a v0.1.0 parser tolerates them
+  and ignores trailing bytes per the §4.1 forward-compatibility
+  contract; it **MUST NOT** return `UNSUPPORTED_VERSION` for a
+  recognised marker. Not reachable from any v0.1.0 input; no marker
+  has been established at v0.1.0. (Q2 decision, Round 6, 2026-04-26.)
 
 `INTERNAL` is implementation-reserved (see §6).
 
@@ -242,6 +296,18 @@ rejects such buffers as `MALFORMED`. When the source has no host,
 the secret is not well-formed and **MUST NOT** be serialised.
 
 ### 3.1 Round-trip property
+
+A `t3_secret_t` is **valid** (for the purposes of this section) when it
+was either (a) returned by a successful call to `t3_secret_parse`, or
+(b) constructed programmatically from a 16-octet key and a non-empty
+UTF-8 `domain` that satisfies §2.1 MALFORMED rules 3 (512-byte
+ceiling), 4 (no leading `0x2f`), 5 (UTF-8 well-formedness), and 6
+(no C0 control / DEL octets); rules 1 (`len < 18`) and 2
+(`buf[0] != 0xff`) are buffer-level checks and do not apply to
+in-memory values. Additionally, all §3 producer constraints
+**MUST hold**: `host` **MUST NOT** contain `0x2f`, `host`
+**MUST NOT** be empty, and `path` is either empty or begins with
+`0x2f`.
 
 For every valid `t3_secret_t s`:
 
@@ -295,14 +361,15 @@ deferred to v0.2.0 and tracked in §6.
 
 ### 4.3 Forward-compatibility constraint on the version marker
 
-Future spec revisions establishing a version marker (per §2.2 / §4.1)
-**MUST NOT** select the octet `0x2f` (ASCII `/`) as the marker value.
-A `0x2f` marker would collide with §1.1's destination-structure split
+This is **non-normative amendment-author guidance**, not an obligation
+on v0.1.0 implementations (which cannot enforce it). Future spec
+revisions establishing a version marker (per §2.2 / §4.1) **SHOULD
+NOT** select the octet `0x2f` (ASCII `/`) as the marker value. A
+`0x2f` marker would collide with §1.1's destination-structure split
 rule: v0.1.0 parsers (which have no awareness of the marker) would
 treat the marker octet as the host/path boundary and silently
-misroute requests. This constraint is an obligation on the future
-v0.2.0+ amendment author at marker-selection time; v0.1.0
-implementations cannot enforce it and are not expected to.
+misroute requests. This guidance is an advisory on the future
+v0.2.0+ amendment author at marker-selection time.
 
 The companion rejection of length-prefixed paths in §6.8 is one
 illustration of why the v0.1.0 trailing region must remain
@@ -328,14 +395,35 @@ Every vector in `secret-format` follows the canonical envelope:
 }
 ```
 
-`args[0]` is a lowercase hexadecimal string. The verifier decodes it
-to octets and computes `len = len(args[0]) / 2`. Odd-length hex is a
-vector-authoring error: the verifier **MUST** exit with code 2
-(harness setup error). Empty string `""` decodes to `len = 0` and is
-not a setup error; it is a valid `MALFORMED` rejection probe.
+`args` **MUST** contain exactly one string. An empty array or an array
+of length greater than 1 is a vector-authoring error: the verifier
+**MUST** exit with code 2 (harness setup error).
+
+`args[0]` **MUST** be a lowercase hexadecimal string (digits `0`–`9`
+and letters `a`–`f` only). No `0x` or `0X` prefix is permitted;
+`args[0]` is bare hex (e.g. `"ff00…"`, not `"0xff00…"`). Uppercase
+hex digits, embedded whitespace, leading prefix characters, and any
+non-hex characters are vector-authoring errors: the verifier **MUST**
+exit with code 2. The verifier decodes `args[0]` to octets
+and computes `len = len(args[0]) / 2`. Odd-length hex is a
+vector-authoring error: the verifier **MUST** exit with code 2.
+Empty string `""` decodes to `len = 0` and is not a setup error; it
+is a valid `MALFORMED` rejection probe.
 
 The verifier invokes `t3_secret_parse(buf, len, out)` and compares the
 parser's result against `expect`.
+
+**Strictness (NORMATIVE).** When `expect.ok == true`, the verifier
+**MUST** require every field declared `Required: yes` in the §5.2
+result schema (`result.key`, `result.domain`, `result.host`,
+`result.path`) to be present in the parser's output and byte-equal to
+the expected value. Missing required keys, mismatched values, or an
+output whose required-key set diverges from §5.2 are verification
+failures. An implementation that returns only `result.domain` and
+omits `result.host` / `result.path` is non-conformant. Extra fields
+not declared in §5.2 (e.g. implementation-internal diagnostics)
+**MUST NOT** cause verification failure provided every required field
+matches.
 
 ### 5.2 Result schema
 
@@ -343,10 +431,10 @@ On success (`expect.ok == true`):
 
 | Field                  | Type     | Required | Description                                                                                  |
 |------------------------|----------|----------|----------------------------------------------------------------------------------------------|
-| `result.key`           | string   | yes      | Exactly 32 lowercase hex characters (16 raw key octets).                                     |
+| `result.key`           | string   | yes      | **MUST** be exactly 32 lowercase hex characters (digits `0`–`9`, letters `a`–`f`; 16 raw key octets). Uppercase hex, wrong length, or non-hex characters are conformance failures. |
 | `result.domain`        | string   | yes      | UTF-8 string copied verbatim from the parsed domain bytes (no normalisation, no escaping). Equals `host || path` (octet concatenation; see §1.1). Preserved for backward-compat with v0.1.0-draft consumers (see Consumer guidance below). |
 | `result.host`          | string   | yes      | UTF-8 string copied verbatim from the host portion of the domain (octets preceding the first `0x2f`, or the entire domain if no `0x2f` is present). Never empty. See §1.1. |
-| `result.path`          | string   | yes      | UTF-8 string copied verbatim from the path portion of the domain (octets from the first `0x2f` to end-of-buffer inclusive of the leading `/`, or the empty string if no `0x2f` is present). May be empty. See §1.1. |
+| `result.path`          | string   | yes      | UTF-8 string copied verbatim from the path portion of the domain (octets from the first `0x2f` to end-of-buffer inclusive of the leading `/`, or the empty string if no `0x2f` is present). Empty (`""`) **MUST** mean "no `0x2f` octet present in `domain`"; otherwise `result.path` **MUST** begin with `/`. The two zero-segment states are distinct: `""` (no separator) vs `"/"` (single trailing slash); see §1.1. |
 | `result.extension_blob`| string   | no       | Lowercase hex of trailing octets after the v0.1.0 layout. Absent at v0.1.0; reserved for v0.2.0. |
 
 **Consumer guidance.** New consumers **SHOULD** read `result.host`
@@ -380,15 +468,22 @@ the runner.
 
 ### 5.4 Vector inventory
 
-The `secret-format` array contains 16 vectors at v0.1.0 (11 baseline +
-5 destination-structure vectors added by amendment A-003):
+The `secret-format` array contains 31 vectors at v0.1.0 (11 baseline +
+5 destination-structure vectors added by amendment A-003 + 6 vectors
+added by Round-6 review: 3 invalid-UTF-8, 2 A-005 domain-ceiling,
+1 forward-compat tolerance + 3 vectors added by Round-7 review:
+1 A-005 boundary-with-path accept, 1 UTF-8-truncated-at-ceiling
+reject, 1 multi-byte-UTF-8-path accept + 6 vectors added by Round-8
+review (A-006): 1 control-byte reject, 3 path-traversal accepts
+(`//`, `/.`, `/..`), 1 mid-host UTF-8 reject, 1 511-byte boundary
+trailing-slash accept):
 
 | ID                              | Polarity | Purpose                                                                                     |
 |---------------------------------|----------|---------------------------------------------------------------------------------------------|
 | `well-formed-v1`                | accept   | Minimal happy path with ASCII domain (host-only, empty path).                               |
 | `well-formed-len-18-min`        | accept   | Boundary: minimum well-formed length (18 octets, 1-octet domain; host-only, empty path).    |
-| `well-formed-non-ascii-cyrillic`| accept   | Non-ASCII UTF-8 domain (Cyrillic IDN), locks "preserve verbatim" rule.                      |
-| `malformed-len-17`              | reject   | Boundary: total length 17 (zero domain octets).                                             |
+| `well-formed-idn-host-only`     | accept   | Non-ASCII UTF-8 domain (Cyrillic IDN, host-only), locks "preserve verbatim" rule.           |
+| `malformed-len-17`              | reject   | Boundary: total length 17 (zero domain octets — below the §2.1 minimum of 18).             |
 | `malformed-len-zero`            | reject   | Empty buffer.                                                                               |
 | `malformed-prefix-fe`           | reject   | Wrong marker octet (`0xfe`).                                                                |
 | `malformed-domain-bad-utf8`     | reject   | Invalid UTF-8 in domain (lone continuation byte).                                           |
@@ -401,6 +496,21 @@ The `secret-format` array contains 16 vectors at v0.1.0 (11 baseline +
 | `well-formed-idn-host-and-path`       | accept | A-003 (review fold-in P-8): non-ASCII (Cyrillic IDN) host with path; locks first-`/` under multi-byte UTF-8.|
 | `well-formed-host-and-trailing-slash` | accept | A-003 (review fold-in P-14): trailing `/` (path consisting solely of `/`); locks §1.1 trailing-slash rule. |
 | `malformed-leading-slash`             | reject | A-003: `domain` begins with `/` (no host prefix); locks §2.1 leading-slash MUST rejection.                 |
+| `malformed-domain-overlong-utf8-c0af`     | reject | Round-6 H3: overlong encoding `C0 AF` for U+002F; locks §2.1 rule 5 overlong rejection.             |
+| `malformed-domain-overlong-utf8-e0-80-80` | reject | Round-6 H3: overlong encoding `E0 80 80` for U+0000; locks §2.1 rule 5 overlong rejection.          |
+| `malformed-domain-cesu8-surrogate`        | reject | Round-6 H3: CESU-8 sequence `ED A0 80` (U+D800 high surrogate); locks §2.1 rule 5 surrogate rejection. |
+| `well-formed-domain-512`                  | accept | Round-6 B1/A-005: domain exactly 512 bytes; boundary accept at the ceiling.                         |
+| `malformed-domain-513`                    | reject | Round-6 B1/A-005: domain 513 bytes; exceeds §2.1 rule 3 ceiling; locks MALFORMED.                  |
+| `well-formed-host-with-tld-suffix`            | accept | Long ASCII domain (host = `example.com.ext`); locks the §1.1 "all post-key octets are domain" rule when no `0x2f` separator present.                                |
+| `well-formed-domain-510-host-and-2-path`      | accept | Round-7 P-12 / A-005 boundary: 510-octet host + `/` + 1-octet path (total domain = 512 bytes); locks accept-at-ceiling-with-path-split.                              |
+| `malformed-domain-utf8-truncated-at-512-boundary` | reject | Round-7 P-13 / A-005 + §2.1 rule 5: 510-octet ASCII host followed by truncated 4-byte UTF-8 sequence at byte 511; locks MALFORMED at ceiling-aligned UTF-8 truncation. |
+| `well-formed-host-and-utf8-path`              | accept | Round-7 P-14 / Round-8 P-22: ASCII host + multi-byte UTF-8 path (`/π汉💩`: U+03C0 2-byte, U+6C49 3-byte, U+1F4A9 4-byte); locks "path bytes are UTF-8, no normalisation" rule across all UTF-8 widths.                                                |
+| `malformed-domain-control-byte`               | reject | A-006 (Round-8 P-6): embedded `0x0A` (LF) octet in domain; locks §2.1 rule 6 control-byte rejection (HTTP request-line injection guard).                            |
+| `well-formed-host-and-double-slash-path`      | accept | A-006 (Round-8 P-8): host + `//x` path; locks first-`/` split with subsequent slashes preserved verbatim.                                                          |
+| `well-formed-host-and-dot-path`               | accept | A-006 (Round-8 P-8): host + `/.` path; locks dot-path-segment passthrough (no normalisation).                                                                       |
+| `well-formed-host-and-dot-dot-path`           | accept | A-006 (Round-8 P-8): host + `/..` path; locks parent-dir-segment passthrough (no normalisation, no rejection).                                                      |
+| `malformed-domain-utf8-mid-host`              | reject | A-006 (Round-8 P-15): `example.com` + `C0 AF` overlong mid-host; locks §2.1 rule 5 rejection at non-zero offset (no "first byte only" implementations).             |
+| `well-formed-domain-511-host-and-trailing-slash` | accept | A-006 (Round-8 P-16): 511-octet host + `/` (total domain = 512 bytes); intersection of A-005 ceiling and trailing-slash; locks `path == "/"` accept at the boundary.|
 
 The three `trailing-extension-*` vectors satisfy the AC-2 backup-list
 clause (vectors covering "secret with backup list of N=1/2/3") at
@@ -444,15 +554,22 @@ trailing-extension forward-compat path of §4. An explicit length
 prefix would force a breaking change at v0.2.0 to introduce extension
 trailing bytes.
 
-### 6.3 RFC 1035 253-octet domain ceiling (rejected)
+### 6.3 RFC 1035 253-octet ceiling rejected — superseded by A-005 512-byte ceiling
 
 **Proposal:** cap `domain_len` at 253 octets per RFC 1035.
 
-**Decision:** rejected. Domain values in Type3 secrets are not DNS
-hostnames in the strict sense; they may carry SNI hints, port
-qualifiers, or future extension payloads (§4) that exceed 253 octets
-legitimately. The parser **MUST** accept any positive `domain_len`
-that does not violate other §2 rules.
+**Decision:** the strict 253-octet RFC 1035 ceiling is rejected. Domain
+values in Type3 secrets are not DNS hostnames in the strict sense; they
+may carry SNI hints, port qualifiers, or future extension payloads (§4)
+that exceed 253 octets legitimately.
+
+**Amendment A-005 (2026-04-26):** a 512-byte upper bound is adopted as
+a partial walkback of A-004 length-silence, following convergent DoS
+analysis (Round 6 — Sterling, Bob, Murat). `domain_len ≤ 512 bytes`
+is now normative (§2.1 MALFORMED rule 3). Parsers **MUST** return
+`MALFORMED` when `domain_len > 512`. The 512-byte ceiling bounds
+unbounded heap allocation risk while accommodating all realistic
+host+path combinations.
 
 ### 6.4 Ed25519-SHA256 backup-list signature scheme (deferred → v0.2.0)
 
@@ -545,3 +662,29 @@ trailing-extension forward-compat path by fixing the path region
 inside `domain`, leaving no contiguous tail for v0.2.0 extension
 payloads. The implicit split is constant-time to derive and adds
 no parser state.
+
+**Amendment note (A-005, 2026-04-26):** A-005 partially walks back
+A-004 length-silence after convergent DoS analysis (Round 6 —
+Sterling, Bob, Murat). The 512-byte ceiling on `domain_len` adopted
+by §2.1 bounds `host_len` and `path_len` implicitly; no separate
+length-prefix mechanism is needed for this bound. See §6.3.
+
+## 7. Conformance contract for Story 1.7 (host/path handoff)
+
+This section records the forward handoff from the Story 1.1
+spec-and-vectors deliverable to Story 1.7 (libteleproto3
+implementation of `t3_secret_parse`).
+
+The implementer obligation to populate `result.host` and
+`result.path` on every successful parse is normatively pinned in
+§5.1 (envelope strictness) and §5.2 (result schema, `Required: yes`
+for both fields). This section does not restate those MUSTs; it
+exists as a process pointer to Story 1.7.
+
+Story 1.7 owns the implementation of `t3_secret_parse` in
+`teleproto3/lib/src/secret.c`. The conformance vectors in §5 are
+the primary quality gate; Story 1.7's test suite **MUST** verify
+all 31 `secret-format` vectors pass (including the five
+destination-structure vectors added by A-003, the six vectors
+added by Round-6 review, the three vectors added by Round-7
+review, and the six vectors added by Round-8 review under A-006).
