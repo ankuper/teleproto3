@@ -18,4 +18,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Placeholder
-        run: echo "TODO: repository_dispatch to consumer forks on vectors drift"
+        run: 'echo "TODO: repository_dispatch to consumer forks on vectors drift"'

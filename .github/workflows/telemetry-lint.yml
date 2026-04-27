@@ -18,4 +18,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Placeholder
-        run: echo "TODO: implement telemetry / beacon / SDK deny-list scan"
+        run: 'echo "TODO: implement telemetry / beacon / SDK deny-list scan"'

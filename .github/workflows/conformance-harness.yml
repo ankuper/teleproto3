@@ -26,4 +26,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Placeholder
-        run: echo "TODO: ./conformance/runner/run.sh --impl ./lib/examples/c-client-side"
+        run: 'echo "TODO: ./conformance/runner/run.sh --impl ./lib/examples/c-client-side"'

@@ -33,4 +33,4 @@ jobs:
             exit 1
           fi
       - name: Frontmatter + RFC 2119 check
-        run: echo "TODO: implement frontmatter schema + RFC 2119 keyword check"
+        run: 'echo "TODO: implement frontmatter schema + RFC 2119 keyword check"'

@@ -18,4 +18,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Placeholder
-        run: echo "TODO: run scripts/ci-portable.sh (no GitHub-specific constructs)"
+        run: 'echo "TODO: run scripts/ci-portable.sh (no GitHub-specific constructs)"'

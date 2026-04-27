@@ -25,4 +25,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Placeholder
-        run: echo "TODO: make -C lib/build, run lib/tests/**"
+        run: 'echo "TODO: make -C lib/build, run lib/tests/**"'
