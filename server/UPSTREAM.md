@@ -14,6 +14,25 @@ repo. `teleproxy/teleproxy` picked up maintenance after Telegram
 stopped updating the official repo. This file tracks the ACTIVE
 upstream only.
 
+## Current pin
+
+<!-- pin-sha: 0000000000000000000000000000000000000000 -->
+
+Machine-parseable sentinel above holds the 40-hex-character commit SHA of
+the last upstream subtree pull. Extract with:
+
+```sh
+# POSIX-portable (no PCRE -oP). ubuntu-latest has GNU grep; this works there too.
+grep -oE '<!-- pin-sha: [0-9a-f]{40} -->' server/UPSTREAM.md \
+  | sed 's/.*pin-sha: \([0-9a-f]\{40\}\) .*/\1/'
+```
+
+Updated automatically by `upstream-sync.yml`; manual edits OK if also
+updating the workflow's expected sentinel format.
+
+Initial value is 40 zeros — placeholder until the first real subtree pull
+lands (style-guide §7 server caveat: scaffold-time placeholder dirs).
+
 ## Pull procedure
 
 ```sh
@@ -69,3 +88,19 @@ Each subtree pull appends an entry here. Use the template below.
   directories in the scaffold. The first `git subtree add` pull will
   populate them. Until then, a `make` inside `server/` will fail — this
   is expected during scaffold.
+
+---
+
+## 2026-04-27 — pulled a7fff272
+
+- Upstream SHA: a7fff27232176186c7f2942bbd84cf18211b9dda
+- Branch: feat/websocket-transport (WebSocket transport patches for Type3 protocol,
+  local path: /Volumes/BuildCache/teleproxy via file:// remote teleproxy-upstream)
+- Merge mode: selective `git read-tree --prefix` into empty subdirs +
+  `rsync --ignore-existing` for net/ (Option (c) per story 1-8 Dev Notes)
+- Conflicts: none — target dirs were empty placeholders; fork-local
+  `net-type3-*.{c,h}` preserved via --ignore-existing
+- Resolution notes: Skipped upstream engine/ and vv/ (not required for v0.1.0).
+  Pull procedure: subtree pull --prefix=server/ with teleproxy-upstream remote.
+- Tests run after pull: build pending (story 1-8 Task 2 wires the Makefile;
+  pre-wire build expected to fail — by design per UPSTREAM.md lines 67–71)

@@ -58,6 +58,8 @@
 #include "net/net-ip-acl.h"
 #include "net/net-thread.h"
 #include "mtproto/mtproto-dc-table.h"
+/* Fork-local Type3 dispatch — AR-S2 (see net-type3-dispatch.h) */
+#include "net-type3-dispatch.h"
 
 #include "vv/vv-io.h"
 
@@ -1479,6 +1481,15 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
       }
       // Fall through to normal MTProto detection with plaintext obfuscated2 in c->in
     }
+
+    /* BEGIN AR-S2 dispatch hook (fork-local Type3 — see net-type3-dispatch.h) */
+    if (c->ws_state == WS_STATE_ACTIVE && !c->crypto) {
+        type3_dispatch_outcome_t r = type3_dispatch_on_crypto_init(C);
+        if (r == TYPE3_DISPATCH_DROP_SILENT) { return NEED_MORE_BYTES; }
+        if (r == TYPE3_DISPATCH_ACCEPT)      { return 0; }
+        /* TYPE3_DISPATCH_PASSTHROUGH falls through to existing logic */
+    }
+    /* END AR-S2 dispatch hook */
 
     if (D->in_packet_num != -3) {
       job_timer_remove (C);
