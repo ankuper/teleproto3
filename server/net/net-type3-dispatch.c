@@ -63,13 +63,13 @@ int type3_dispatch_init(const char *kill_switch_mode) {
     } else if (strcmp(kill_switch_mode, "hard-close") == 0) {
         g_ks_mode = KS_MODE_HARD_CLOSE;
     } else {
-        kprintf(0, "type3_dispatch_init: unknown kill-switch mode '%s' "
+        kprintf("type3_dispatch_init: unknown kill-switch mode '%s' "
                    "(expected 'drain' or 'hard-close')\n", kill_switch_mode);
         return -1;
     }
     /* Start idle */
     type3_stats.kill_switch_state = 0;
-    kprintf(1, "type3_dispatch: initialised (kill-switch mode=%s)\n",
+    vkprintf(1, "type3_dispatch: initialised (kill-switch mode=%s)\n",
             kill_switch_mode ? kill_switch_mode : "drain");
     return 0;
 }
@@ -92,12 +92,12 @@ void type3_dispatch_kill_switch_poll(void) {
         g_ks_active = 1;
         int new_state = (g_ks_mode == KS_MODE_DRAIN) ? 1 : 2;
         __atomic_store_n(&type3_stats.kill_switch_state, new_state, __ATOMIC_RELAXED);
-        kprintf(1, "type3_dispatch: kill-switch activated (state=%d)\n", new_state);
+        vkprintf(1, "type3_dispatch: kill-switch activated (state=%d)\n", new_state);
     } else if (!present && g_ks_active) {
         /* Transition: present → absent */
         g_ks_active = 0;
         __atomic_store_n(&type3_stats.kill_switch_state, 0, __ATOMIC_RELAXED);
-        kprintf(1, "type3_dispatch: kill-switch deactivated\n");
+        vkprintf(1, "type3_dispatch: kill-switch deactivated\n");
     }
 }
 

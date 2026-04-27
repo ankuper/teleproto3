@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <inttypes.h>
 #include <unistd.h>
 #include <errno.h>
 #include <netinet/in.h>
@@ -149,7 +150,7 @@ int type3_stats_emit(int sockfd) {
     char body[8192];
     int body_len = build_prom_body(body, sizeof(body));
     if (body_len < 0) {
-        kprintf(0, "type3_stats_emit: buffer overflow building Prometheus body\n");
+        kprintf("type3_stats_emit: buffer overflow building Prometheus body\n");
         body_len = 0;
     }
 
@@ -178,7 +179,7 @@ int type3_stats_emit(int sockfd) {
 int type3_stats_listen(int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
-        kprintf(0, "type3_stats_listen: socket: %s\n", strerror(errno));
+        kprintf("type3_stats_listen: socket: %s\n", strerror(errno));
         return -1;
     }
     int opt = 1;
@@ -186,7 +187,7 @@ int type3_stats_listen(int port) {
 
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
-        kprintf(0, "type3_stats_listen: fcntl: %s\n", strerror(errno));
+        kprintf("type3_stats_listen: fcntl: %s\n", strerror(errno));
         close(fd);
         return -1;
     }
@@ -197,15 +198,15 @@ int type3_stats_listen(int port) {
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); /* 127.0.0.1 only */
 
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        kprintf(0, "type3_stats_listen: bind 127.0.0.1:%d: %s\n", port, strerror(errno));
+        kprintf("type3_stats_listen: bind 127.0.0.1:%d: %s\n", port, strerror(errno));
         close(fd);
         return -1;
     }
     if (listen(fd, 8) < 0) {
-        kprintf(0, "type3_stats_listen: listen: %s\n", strerror(errno));
+        kprintf("type3_stats_listen: listen: %s\n", strerror(errno));
         close(fd);
         return -1;
     }
-    kprintf(1, "type3_stats: listening on 127.0.0.1:%d\n", port);
+    vkprintf(1, "type3_stats: listening on 127.0.0.1:%d\n", port);
     return fd;
 }
