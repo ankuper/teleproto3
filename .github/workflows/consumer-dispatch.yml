@@ -2,12 +2,23 @@
 # events to the three client forks so their bump-PR bots open a PR
 # pinning the new libteleproto3 release tarball. (Amelia's automation.)
 #
+# fires only on MAJOR or MINOR bump; PATCH bumps suppressed.
+# Initial release (no prior lib-v* tag) is ALSO suppressed — there is no
+# prior consumer pin to bump, so dispatch would either no-op or open
+# spurious PRs.
+#
 # Cross-version CI gate: lib-vX.Y.Z is not considered "final" until all
 # three consumers have reported CI-green against the preceding RC tag.
 # See lib/docs/versioning.md for the full protocol.
 #
-# TODO(lib-v0.1.0): plug in the actual repository_dispatch payload +
-# secrets (PAT with repository_dispatch scope).
+# Pre-release tags (lib-vX.Y.Z-rc1, -beta2, etc.) are recognised by the
+# trailing `-` suffix and are EXCLUDED from the "previous tag" lookup so
+# that a stable bump's previous-tag baseline is the previous STABLE tag,
+# not an intervening RC.
+#
+# Secrets: CONSUMER_DISPATCH_PAT — fine-grained PAT with
+# repository_dispatch scope on each consumer repo. Provisioned per
+# lib/docs/versioning.md "Secret provisioning". Do NOT commit the PAT.
 name: consumer-dispatch
 
 on:
@@ -18,12 +29,131 @@ on:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     strategy:
+      # Each consumer is independent — one failing dispatch must not cancel
+      # the other two. fail-fast:false lets all three matrix legs run to
+      # completion so Amelia sees the full picture in one CI run.
+      fail-fast: false
       matrix:
         consumer:
-          - ankuper/tdesktop-fork
-          - ankuper/telegram-ios-fork
-          - ankuper/telegram-android-fork
+          - toxeh/tdesktop-fork
+          - toxeh/telegram-ios-fork
+          - toxeh/telegram-android-fork
     steps:
-      - name: Placeholder
-        run: echo "TODO: repository_dispatch to ${{ matrix.consumer }} with lib tag ${{ github.ref_name }}"
+      - name: Checkout (full tag history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # MANDATORY — without this, `git tag -l` is empty.
+
+      - name: Validate tag format
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Canonical: lib-vMAJOR.MINOR.PATCH with optional pre-release
+          # suffix (e.g. -rc1, -beta.2). Reject anything else so we don't
+          # mis-parse and accidentally fire a malformed dispatch.
+          if ! printf '%s' "$REF_NAME" | grep -Eq '^lib-v[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$'; then
+            echo "::error::tag '$REF_NAME' does not match lib-vMAJOR.MINOR.PATCH[-prerelease]"
+            exit 1
+          fi
+
+      - name: Detect bump kind
+        id: bumpkind
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # Current tag is the one being pushed (refs/tags/lib-vX.Y.Z).
+          current="$REF_NAME"
+          # All lib-v* tags, newest first, EXCLUDING pre-release suffixes
+          # (anything containing `-`) so the previous-tag baseline tracks
+          # stable releases only. Also exclude the current tag itself.
+          all_tags="$(git tag -l 'lib-v*' --sort=-v:refname | grep -v -- '-' || true)"
+          tag_count="$(printf '%s\n' "$all_tags" | grep -c . || true)"
+          # Initial-release guard (PR6/D6): if there is no prior stable
+          # tag (count <= 1, i.e. only the current tag exists), there is
+          # no consumer pin to bump. Suppress dispatch entirely.
+          if [ "$tag_count" -le 1 ]; then
+            echo "::notice::initial release detected (no prior stable lib-v* tag); suppressing dispatch"
+            echo "bump_kind=initial-release" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          previous="$(printf '%s\n' "$all_tags" | grep -v "^${current}$" | head -1 || true)"
+          # Defensive shallow-clone fail-safe: if we cannot find a real previous
+          # tag (empty, OR identical to current — both indicate broken/shallow
+          # tag history), fail safe to MAJOR so dispatch fires. Suppression is
+          # the optimisation; firing is the safe default.
+          if [ -z "$previous" ] || [ "$previous" = "$current" ]; then
+            echo "::warning::tag history fetch incomplete or no previous tag (current=$current, previous=$previous); failing safe to MAJOR (dispatch will fire)"
+            echo "bump_kind=major" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Strip lib-v prefix; split on dots. Strip any pre-release suffix
+          # from current too (we already excluded them from `previous`, but
+          # `current` itself can be a pre-release that we still want to
+          # classify against the previous stable tag).
+          cur_ver="${current#lib-v}"
+          cur_ver="${cur_ver%%-*}"
+          prev_ver="${previous#lib-v}"
+          cur_major="${cur_ver%%.*}"
+          cur_rest="${cur_ver#*.}"
+          cur_minor="${cur_rest%%.*}"
+          prev_major="${prev_ver%%.*}"
+          prev_rest="${prev_ver#*.}"
+          prev_minor="${prev_rest%%.*}"
+          if [ "$cur_major" != "$prev_major" ]; then
+            echo "MAJOR bump: $previous -> $current"
+            echo "bump_kind=major" >> "$GITHUB_OUTPUT"
+          elif [ "$cur_minor" != "$prev_minor" ]; then
+            echo "MINOR bump: $previous -> $current"
+            echo "bump_kind=minor" >> "$GITHUB_OUTPUT"
+          else
+            echo "patch-only bump: $previous -> $current; suppressing dispatch"
+            echo "bump_kind=patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Idempotency guard (skip if dispatch already fired for this tag)
+        id: idempotency
+        if: steps.bumpkind.outputs.bump_kind != 'patch' && steps.bumpkind.outputs.bump_kind != 'initial-release'
+        env:
+          GH_TOKEN: ${{ secrets.CONSUMER_DISPATCH_PAT }}
+          CONSUMER: ${{ matrix.consumer }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # If the consumer already has an open OR merged PR titled with
+          # this exact lib_tag, the dispatch already fired (possibly from
+          # a force-pushed tag rewrite or a re-run). Skip to avoid
+          # duplicate PRs. Title convention is enforced by the bump-PR
+          # bot side: "chore(deps): bump libteleproto3 to <REF_NAME>".
+          query="chore(deps): bump libteleproto3 to ${REF_NAME}"
+          existing="$(gh pr list -R "$CONSUMER" --state all --search "$query in:title" --json number --jq 'length' || echo 0)"
+          if [ "${existing:-0}" -gt 0 ]; then
+            echo "::notice::consumer $CONSUMER already has $existing PR(s) for $REF_NAME; skipping dispatch"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch to consumer
+        if: steps.bumpkind.outputs.bump_kind != 'patch' && steps.bumpkind.outputs.bump_kind != 'initial-release' && steps.idempotency.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.CONSUMER_DISPATCH_PAT }}
+          CONSUMER: ${{ matrix.consumer }}
+          LIB_TAG: ${{ github.ref_name }}
+          BUMP_KIND: ${{ steps.bumpkind.outputs.bump_kind }}
+        run: |
+          set -euo pipefail
+          # Build JSON body in jq (so values are properly quoted/escaped)
+          # and pipe through --input - to avoid shell-injection-prone
+          # `-f key=${{ ... }}` interpolation. All inputs come from env
+          # vars set above, never from raw ${{ }} expansion in this step.
+          jq -n \
+            --arg lib_tag   "$LIB_TAG" \
+            --arg bump_kind "$BUMP_KIND" \
+            '{event_type: "lib-bump", client_payload: {lib_tag: $lib_tag, bump_kind: $bump_kind}}' \
+            | gh api -X POST "repos/${CONSUMER}/dispatches" --input -
