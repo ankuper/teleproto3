@@ -1,0 +1,16 @@
+# Build artifacts
+lib/build/*.o
+lib/build/*.a
+lib/build/test_*
+lib/build/*.dSYM
+
+# Secrets and runtime data
+server/.env
+server/data/
+
+# Nested repo copy (not committed)
+teleproto3_git/
+
+# Planning/generation scripts (BMad artifacts, not codebase)
+generate_epic4_atdd.py
+generate_prompts.py
