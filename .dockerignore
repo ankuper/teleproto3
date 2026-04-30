@@ -1,0 +1,38 @@
+# Repo-root .dockerignore — keeps the build context for server/Dockerfile lean.
+# Build context = repo root (so server/ and lib/ are both available).
+
+# VCS / IDE
+.git
+.gitignore
+.gitattributes
+.idea/
+.vscode/
+
+# Build artifacts (re-built inside the image)
+**/objs/
+**/dep/
+**/build/*.o
+**/build/*.a
+**/build/*.dSYM/
+**/build/test_*
+
+# Nested git mirrors / tools that aren't needed inside the image
+teleproto3_git/
+generate_*.py
+
+# Subtree exclusions: only server/ + lib/ feed the image. The COPY directives
+# in server/Dockerfile pick those up explicitly; everything else is dead weight.
+spec/
+conformance/
+docs/
+
+# Markdown / planning docs (image is binary-only)
+*.md
+!server/README.md
+!server/CHANGELOG.md
+
+# CI workflows (not needed inside the image)
+.github/
+
+# Compose files (not COPY'd in by the Dockerfile)
+**/docker-compose*

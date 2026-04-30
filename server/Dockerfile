@@ -8,15 +8,17 @@ ARG DEBUG_TOOLS=0
 RUN apk add --no-cache build-base openssl-dev zlib-dev linux-headers git \
     $([ "$DEBUG_TOOLS" = "1" ] && echo "libunwind-dev")
 
-# Set working directory
-WORKDIR /src
+# Layout: server/ links against lib/build/libteleproto3.a via T3_LIB_DIR=../lib.
+# Build context MUST be the repo root (server/ + lib/ are siblings).
+COPY server /src/server
+COPY lib    /src/lib
 
-# Copy source code
-COPY . .
+WORKDIR /src/server
 
 # Build the application
 ARG VERSION=unknown
-RUN make clean && make -j$(nproc) EXTRA_VERSION="${VERSION}"
+ARG COMMIT=unknown
+RUN make clean && make -j$(nproc) EXTRA_VERSION="${VERSION}" COMMIT="${COMMIT}"
 
 # Runtime image
 FROM alpine:3.21
@@ -46,7 +48,7 @@ RUN adduser -D -H -s /sbin/nologin teleproxy
 WORKDIR /opt/teleproxy
 
 # Copy binary from builder stage
-COPY --from=builder /src/objs/bin/teleproxy /opt/teleproxy/
+COPY --from=builder /src/server/objs/bin/teleproxy /opt/teleproxy/
 
 # Make binary executable
 RUN chmod +x /opt/teleproxy/teleproxy \
@@ -64,7 +66,7 @@ RUN mkdir -p /opt/teleproxy/data
 # Prevents proxy from becoming unavailable due to stale DC configuration.
 # Output is redirected to PID 1's stdout so it appears in `docker logs`.
 # busybox crond reads /etc/crontabs/<user> (no user field in entry, unlike Ubuntu cron.d)
-COPY teleproxy-config-refresh.sh /opt/teleproxy/config-refresh.sh
+COPY server/teleproxy-config-refresh.sh /opt/teleproxy/config-refresh.sh
 RUN chmod +x /opt/teleproxy/config-refresh.sh \
     && echo '0 */6 * * * /opt/teleproxy/config-refresh.sh >> /proc/1/fd/1 2>> /proc/1/fd/2' >> /etc/crontabs/root
 
@@ -72,7 +74,7 @@ RUN chmod +x /opt/teleproxy/config-refresh.sh \
 EXPOSE 443 8888
 
 # Add startup script (POSIX sh — no bash dependency)
-COPY start.sh /opt/teleproxy/start.sh
+COPY server/start.sh /opt/teleproxy/start.sh
 RUN chmod +x /opt/teleproxy/start.sh
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \

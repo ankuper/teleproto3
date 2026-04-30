@@ -60,7 +60,11 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: server
+          # Repo-root context: server/Dockerfile COPY's both `server/` and
+          # `lib/` since server/Makefile links lib/build/libteleproto3.a via
+          # T3_LIB_DIR=../lib. .dockerignore at the repo root keeps it lean.
+          context: .
+          file: server/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -69,3 +73,4 @@ jobs:
           cache-to: type=gha,mode=max
           build-args: |
             VERSION=${{ github.sha }}
+            COMMIT=${{ github.sha }}
