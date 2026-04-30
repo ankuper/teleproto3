@@ -1,20 +1,51 @@
-# BUILD.bazel — Bazel build for libteleproto3.
-# Consumed by the iOS fork via http_archive + SHA256 pin.
-# TODO(lib-v0.1.0): verify with `bazel build //lib:libteleproto3` once
-# the source is real. Paths relative to the package root (lib/build/).
-
-package(default_visibility = ["//visibility:public"])
+# BUILD.bazel — Bazel 7 build for libteleproto3.
+#
+# This is the reference implementation of the Type3 protocol.
+# Normative behaviour is defined in spec/. Where they differ, spec/ wins.
+#
+# Source: story 1.7 routing-fix item #4.
+# Uses strip_include_prefix (idiomatic Bazel 7) instead of includes=[].
 
 cc_library(
-    name = "libteleproto3",
-    srcs = [
-        "//lib/src:t3_secret.c",
-        "//lib/src:t3_obfuscated2.c",
-        "//lib/src:t3_session_header.c",
-        "//lib/src:t3_keyderiv.c",
-        "//lib/src:t3_url_parser.c",
+    name = "teleproto3",
+    srcs = glob(["../src/*.c"]),
+    hdrs = glob(["../include/**/*.h"]),
+    strip_include_prefix = "../include",
+    copts = [
+        "-std=gnu11",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-Werror",
+        "-fPIC",
+        "-fvisibility=hidden",
     ],
-    hdrs = ["//lib/include:t3.h"],
-    includes = ["../include"],
-    copts = ["-std=gnu11", "-O2", "-Wall", "-Wextra", "-Wpedantic"],
+    visibility = ["//visibility:public"],
+)
+
+cc_test(
+    name = "test_secret",
+    srcs = ["../tests/unit/test_secret.c"],
+    data = ["//conformance/vectors:unit.json"],
+    deps = [":teleproto3"],
+)
+
+cc_test(
+    name = "test_session_header",
+    srcs = ["../tests/unit/test_session_header.c"],
+    data = ["//conformance/vectors:unit.json"],
+    deps = [":teleproto3"],
+)
+
+cc_test(
+    name = "test_retry",
+    srcs = ["../tests/unit/test_retry.c"],
+    deps = [":teleproto3"],
+)
+
+cc_test(
+    name = "test_url_parser",
+    srcs = ["../tests/unit/test_url_parser.c"],
+    data = ["//conformance/vectors:unit.json"],
+    deps = [":teleproto3"],
 )
