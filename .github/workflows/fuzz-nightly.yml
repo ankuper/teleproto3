@@ -1,0 +1,185 @@
+---
+# fuzz-nightly.yml — Nightly fuzz run: ≥1h crash mode + ≥1h timing mode.
+#
+# Hard gates:
+#   Crash mode : zero crashes, ≥ 80% line coverage of lib/src/header.c + secret.c
+#   Timing mode: |ρ| < 0.1, all TOST pairs equiv, N ≥ 10 000
+#
+# Linux only for timing (setarch -R, taskset — no equivalent on macOS).
+# Crash mode on both OSes (ASLR on, defence in depth).
+#
+# Source: story 1.10 AC#1, AC#2, Task 6; epic-1-style-guide §13.
+
+name: fuzz-nightly
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 02:00 UTC daily
+  workflow_dispatch:       # allow manual trigger
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-crash-nightly:
+    name: Crash mode nightly (≥1h, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, macos-13]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang + libFuzzer + coverage tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y clang llvm
+
+      - name: Install llvm for libFuzzer (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+
+      - name: Build libteleproto3.a
+        run: make -C lib/build all
+        env:
+          CC: clang
+
+      - name: Build crash-mode harnesses
+        run: make -C lib/build fuzz-crash
+        env:
+          CC: clang
+
+      - name: Run header_fuzz_crash (≥1h)
+        run: |
+          lib/build/header_fuzz_crash \
+            lib/fuzz/corpus/header_byteorder \
+            -fork=1 \
+            -max_total_time=3600 \
+            -artifact_prefix=crash-header-nightly-
+
+      - name: Run secret_fuzz_crash (≥1h)
+        run: |
+          lib/build/secret_fuzz_crash \
+            -fork=1 \
+            -max_total_time=3600 \
+            -artifact_prefix=crash-secret-nightly-
+
+      # Coverage gate: ≥ 80% line coverage of lib/src/header.c + secret.c
+      # Hard gate on nightly lane.
+      - name: Coverage check (Linux, hard gate ≥80%)
+        if: runner.os == 'Linux'
+        run: |
+          # Build with coverage instrumentation
+          make -C lib/build clean
+          CC=clang CFLAGS="-std=gnu11 -O1 -g --coverage -fvisibility=hidden" \
+            make -C lib/build all
+
+          # Re-run brief fuzz with coverage binary (5 min for coverage data)
+          CC=clang FUZZ_CRASH_CFLAGS="-std=gnu11 -O1 -g --coverage -fvisibility=hidden -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer" \
+            make -C lib/build fuzz-crash || true
+          lib/build/header_fuzz_crash \
+            lib/fuzz/corpus/header_byteorder \
+            -fork=1 \
+            -max_total_time=300 2>/dev/null || true
+          lib/build/secret_fuzz_crash \
+            -fork=1 \
+            -max_total_time=300 2>/dev/null || true
+
+          # Merge profiling data
+          llvm-profdata merge -sparse *.profraw -o cov.profdata 2>/dev/null
+          if [ ! -f cov.profdata ]; then
+            echo "FAIL: no profraw files generated — cannot measure coverage"
+            exit 1
+          fi
+
+          # Extract line coverage % and enforce ≥80% hard gate
+          REPORT=$(llvm-cov report \
+            lib/build/header_fuzz_crash \
+            -instr-profile=cov.profdata \
+            lib/src/t3_session_header.c lib/src/t3_secret.c 2>&1) || true
+          echo "$REPORT"
+          # Parse the TOTAL line: "TOTAL ... NN.NN%"
+          COVERAGE=$(echo "$REPORT" | grep TOTAL | awk '{print $(NF-2)}' | tr -d '%')
+          if [ -z "$COVERAGE" ]; then
+            echo "WARN: could not parse coverage from llvm-cov report"
+            exit 1
+          fi
+          # Compare as integer (floor): 80.00 -> 80
+          COV_INT=$(echo "$COVERAGE" | cut -d. -f1)
+          echo "Line coverage: ${COVERAGE}% (threshold: 80%)"
+          if [ "$COV_INT" -lt 80 ]; then
+            echo "FAIL: line coverage ${COVERAGE}% < 80% hard gate"
+            exit 1
+          fi
+          echo "PASS: line coverage ${COVERAGE}% >= 80%"
+
+  fuzz-timing-nightly:
+    name: Timing mode nightly (≥1h, Linux only)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang + libFuzzer + util-linux (setarch, taskset)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y clang llvm util-linux
+
+      - name: Build libteleproto3.a
+        run: make -C lib/build all
+        env:
+          CC: clang
+
+      - name: Build timing-mode harnesses
+        run: make -C lib/build fuzz-timing
+        env:
+          CC: clang
+
+      - name: Run header_fuzz_timing (≥1h, ASLR off, pinned core)
+        run: |
+          # setarch -R disables ASLR for stable timing.
+          # taskset -c 2 pins to a cool core (CI image typically has ≥4).
+          # nice -20 if root; nice -10 otherwise.
+          if [ "$(id -u)" -eq 0 ]; then
+            NICE_LVL="-20"
+          else
+            NICE_LVL="-10"
+          fi
+          setarch "$(uname -m)" -R taskset -c 2 nice "$NICE_LVL" \
+            lib/build/header_fuzz_timing \
+              lib/fuzz/corpus/header_byteorder \
+              -fork=1 \
+              -max_total_time=3600
+
+      - name: Run secret_fuzz_timing (≥1h, ASLR off, pinned core)
+        run: |
+          if [ "$(id -u)" -eq 0 ]; then
+            NICE_LVL="-20"
+          else
+            NICE_LVL="-10"
+          fi
+          setarch "$(uname -m)" -R taskset -c 2 nice "$NICE_LVL" \
+            lib/build/secret_fuzz_timing \
+              -fork=1 \
+              -max_total_time=3600
+
+      - name: Analyse timing logs — hard gate (N ≥ 10 000, |ρ| < 0.1, TOST pass)
+        run: |
+          mkdir -p conformance/baselines
+          python3 lib/fuzz/analyse.py \
+            --log 'lib/fuzz/side-channel-*.log' \
+            --baseline conformance/baselines/lib-v0.1.0.yaml \
+            --emit-block input_independence \
+            --n-min 10000 \
+            --alpha 0.05 \
+            --tost-delta-ms 2
+          # Exit non-zero on gate failure — fails the job.
+
+      - name: Upload baseline YAML as artefact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lib-v0.1.0-nightly-${{ github.run_id }}
+          path: conformance/baselines/lib-v0.1.0.yaml

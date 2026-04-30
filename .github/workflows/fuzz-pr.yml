@@ -1,0 +1,168 @@
+---
+# fuzz-pr.yml — PR fast-lane: 5-min crash mode + 5-min timing smoke.
+#
+# Coverage gate = soft warning (PR lane).
+# Timing gate   = underpowered warning (N < 10 000 expected in 5 min),
+#                 non-gating (exit 0).
+#
+# Linux only for timing (setarch -R / taskset unavailable on macOS).
+# Crash mode runs on both (ASLR on, defence in depth).
+#
+# Source: story 1.10 AC#1, AC#2, Task 6; epic-1-style-guide §13.
+
+name: fuzz-pr
+
+on:
+  pull_request:
+    paths:
+      - 'lib/fuzz/**'
+      - 'lib/src/**'
+      - 'lib/include/**'
+      - 'lib/build/Makefile'
+      - '.github/workflows/fuzz-pr.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz-crash:
+    name: Crash mode (5 min, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, macos-13]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang + libFuzzer (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y clang llvm
+
+      - name: Install llvm for libFuzzer (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm
+          echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+
+      - name: Build libteleproto3.a
+        run: make -C lib/build all
+        env:
+          CC: clang
+
+      - name: Run no-rdtsc lint
+        run: bash lib/fuzz/check-no-rdtsc.sh
+
+      - name: Build crash-mode harnesses
+        run: make -C lib/build fuzz-crash
+        env:
+          CC: clang
+
+      - name: Run header_fuzz_crash (5 min)
+        run: |
+          lib/build/header_fuzz_crash \
+            lib/fuzz/corpus/header_byteorder \
+            -fork=1 \
+            -max_total_time=300 \
+            -artifact_prefix=crash-header-
+        continue-on-error: false
+
+      - name: Run secret_fuzz_crash (5 min)
+        run: |
+          lib/build/secret_fuzz_crash \
+            -fork=1 \
+            -max_total_time=300 \
+            -artifact_prefix=crash-secret-
+        continue-on-error: false
+
+  fuzz-timing-smoke:
+    name: Timing smoke (5 min, Linux only)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang + libFuzzer
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y clang llvm util-linux
+
+      - name: Build libteleproto3.a
+        run: make -C lib/build all
+        env:
+          CC: clang
+
+      - name: Build timing-mode harnesses
+        run: make -C lib/build fuzz-timing
+        env:
+          CC: clang
+
+      - name: Run header_fuzz_timing smoke (5 min, ASLR off)
+        run: |
+          setarch "$(uname -m)" -R nice -10 \
+            lib/build/header_fuzz_timing \
+              lib/fuzz/corpus/header_byteorder \
+              -fork=1 \
+              -max_total_time=300
+        # underpowered → exit 0 (non-gating)
+
+      - name: Run secret_fuzz_timing smoke (5 min, ASLR off)
+        run: |
+          setarch "$(uname -m)" -R nice -10 \
+            lib/build/secret_fuzz_timing \
+              -fork=1 \
+              -max_total_time=300
+
+      - name: Analyse timing logs (underpowered warning expected)
+        run: |
+          python3 lib/fuzz/analyse.py \
+            --log 'lib/fuzz/side-channel-*.log' \
+            --baseline conformance/baselines/lib-v0.1.0.yaml \
+            --emit-block input_independence \
+            --n-min 10000 \
+            --alpha 0.05 \
+            --tost-delta-ms 2 || true
+          # Coverage gate is a soft warning on PR lane (not gating)
+
+  fuzz-coverage-pr:
+    name: Coverage soft-warning (Linux, PR lane)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang + llvm
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y clang llvm
+
+      - name: Build libteleproto3.a with coverage
+        run: |
+          CC=clang CFLAGS="-std=gnu11 -O1 -g --coverage -fvisibility=hidden" \
+            make -C lib/build all
+        env:
+          CC: clang
+
+      - name: Build + run crash harnesses for coverage data (5 min)
+        run: |
+          CC=clang FUZZ_CRASH_CFLAGS="-std=gnu11 -O1 -g --coverage -fvisibility=hidden -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer" \
+            make -C lib/build fuzz-crash || true
+          lib/build/header_fuzz_crash \
+            lib/fuzz/corpus/header_byteorder \
+            -fork=1 \
+            -max_total_time=300 2>/dev/null || true
+          lib/build/secret_fuzz_crash \
+            -fork=1 \
+            -max_total_time=300 2>/dev/null || true
+
+      - name: Coverage report (soft warning — not gating)
+        run: |
+          llvm-profdata merge -sparse *.profraw -o cov.profdata 2>/dev/null || true
+          if [ -f cov.profdata ]; then
+            llvm-cov report \
+              lib/build/header_fuzz_crash \
+              -instr-profile=cov.profdata \
+              lib/src/t3_session_header.c lib/src/t3_secret.c \
+              2>/dev/null || echo "WARN: coverage report failed (non-gating)"
+          else
+            echo "WARN: no profraw files generated (non-gating)"
+          fi
