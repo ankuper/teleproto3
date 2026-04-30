@@ -29,6 +29,7 @@ static t3_session_t *make_session(void){
     cb.frame_send=stub_fs; cb.frame_recv=stub_fr;
     cb.rng=stub_rng; cb.monotonic_ns=stub_clock;
     if(t3_session_bind_callbacks(sess,&cb)!=T3_OK){t3_session_free(sess);t3_secret_free(sec);return NULL;}
+    t3_secret_free(sec);
     return sess;
 }
 
