@@ -1,0 +1,200 @@
+site_name: Teleproxy
+site_url: https://teleproxy.github.io
+site_description: High-performance MTProto proxy for Telegram with DPI resistance, fake-TLS camouflage, and production-grade monitoring
+repo_url: https://github.com/teleproxy/teleproxy
+repo_name: teleproxy/teleproxy
+
+theme:
+  name: material
+  custom_dir: docs/overrides
+  logo: assets/logo.svg
+  favicon: assets/favicon.png
+  font: false
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+  icon:
+    repo: fontawesome/brands/github
+
+extra:
+  version: "4.9.0"
+
+extra_css:
+  - assets/extra.css
+
+extra_javascript:
+  - assets/comparison.js
+
+plugins:
+  - search
+  - i18n:
+      docs_structure: suffix
+      reconfigure_material: true
+      languages:
+        - locale: en
+          name: English
+          default: true
+          build: true
+        - locale: ru
+          name: Русский
+          build: true
+          nav_translations:
+            Home: Главная
+            Comparison: Сравнение
+            Getting Started: Начало работы
+            Installation: Установка
+            Quick Start: Быстрый старт
+            Docker: Docker
+            Configuration: Конфигурация
+            Monitoring: Мониторинг
+            Features: Возможности
+            DPI Resistance: Устойчивость к DPI
+            "Fake-TLS (EE Mode)": "Fake-TLS (режим EE)"
+            Direct-to-DC Mode: Прямое подключение к DC
+            IP Access Control: Контроль доступа по IP
+            "Secrets & Limits": "Секреты и лимиты"
+            Connection Links: Ссылки подключения
+            Diagnostics: Диагностика
+            SOCKS5 Upstream Proxy: SOCKS5 прокси
+            Deployment: Развёртывание
+            Cloud Deploy: Облачное развёртывание
+            Cloudflare Spectrum: Cloudflare Spectrum
+            Systemd: Systemd
+            IPv6: IPv6
+            Tuning: Тюнинг
+            Testing: Тестирование
+            Changelog: Журнал изменений
+            Observatory: Обсерватория
+        - locale: fa
+          name: فارسی
+          build: true
+          nav_translations:
+            Home: خانه
+            Comparison: مقایسه
+            Getting Started: شروع کار
+            Installation: نصب
+            Quick Start: شروع سریع
+            Docker: Docker
+            Configuration: پیکربندی
+            Monitoring: مانیتورینگ
+            Features: ویژگی‌ها
+            DPI Resistance: مقاومت در برابر DPI
+            "Fake-TLS (EE Mode)": "Fake-TLS (حالت EE)"
+            Direct-to-DC Mode: اتصال مستقیم به DC
+            IP Access Control: کنترل دسترسی IP
+            "Secrets & Limits": "رمزها و محدودیت‌ها"
+            Connection Links: لینک‌های اتصال
+            Diagnostics: تشخیص
+            SOCKS5 Upstream Proxy: پروکسی SOCKS5
+            Deployment: استقرار
+            Cloud Deploy: استقرار ابری
+            Cloudflare Spectrum: Cloudflare Spectrum
+            Systemd: Systemd
+            IPv6: IPv6
+            Tuning: تنظیم عملکرد
+            Testing: تست
+            Changelog: تاریخچه تغییرات
+            Observatory: رصدخانه
+        - locale: vi
+          name: Tiếng Việt
+          build: true
+          nav_translations:
+            Home: Trang chủ
+            Comparison: So sánh
+            Getting Started: Bắt đầu
+            Installation: Cài đặt
+            Quick Start: Khởi động nhanh
+            Docker: Docker
+            Configuration: Cấu hình
+            Monitoring: Giám sát
+            Features: Tính năng
+            DPI Resistance: Chống DPI
+            "Fake-TLS (EE Mode)": "Fake-TLS (Chế độ EE)"
+            Direct-to-DC Mode: Kết nối trực tiếp đến DC
+            IP Access Control: Kiểm soát truy cập IP
+            "Secrets & Limits": "Bí mật & Giới hạn"
+            Connection Links: Liên kết kết nối
+            Diagnostics: Chẩn đoán
+            SOCKS5 Upstream Proxy: Proxy SOCKS5
+            Deployment: Triển khai
+            Cloud Deploy: Triển khai đám mây
+            Cloudflare Spectrum: Cloudflare Spectrum
+            Systemd: Systemd
+            IPv6: IPv6
+            Tuning: Tinh chỉnh
+            Testing: Kiểm thử
+            Changelog: Nhật ký thay đổi
+            Observatory: Quan sát
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets
+  - attr_list
+  - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Comparison: comparison.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+  - Docker:
+    - Quick Start: docker/index.md
+    - Configuration: docker/configuration.md
+    - Monitoring: docker/monitoring.md
+  - Features:
+    - DPI Resistance: features/dpi-resistance.md
+    - Fake-TLS (EE Mode): features/fake-tls.md
+    - WebSocket Transport: features/websocket-transport.md
+    - Direct-to-DC Mode: features/direct-mode.md
+    - IP Access Control: features/access-control.md
+    - Secrets & Limits: features/secrets.md
+    - Monitoring: features/monitoring.md
+    - SOCKS5 Upstream Proxy: features/socks5.md
+    - PROXY Protocol: features/proxy-protocol.md
+    - Connection Links: features/link.md
+    - Diagnostics: features/diagnostics.md
+  - Deployment:
+    - Systemd: deployment/systemd.md
+    - IPv6: deployment/ipv6.md
+    - Tuning: deployment/tuning.md
+    - Cloudflare Spectrum: deployment/cloudflare-spectrum.md
+    - WebSocket (Type3): deployment/websocket.md
+    - Cloud Deploy: https://teleproxy.github.io/deploy/
+  - Testing: testing.md
+  - Changelog: changelog.md
+  - Observatory: https://teleproxy.github.io/observatory/

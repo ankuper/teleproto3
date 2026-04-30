@@ -1,0 +1,42 @@
+objs
+dep
+.idea
+proxy-multi.conf
+proxy-secret
+fuzz/fuzz_tls_server_hello
+fuzz/fuzz_tls_client_hello
+fuzz/fuzz_http_request
+fuzz/*.o
+fuzz/crash-*
+fuzz/oom-*
+fuzz/timeout-*
+*.dSYM/
+# Docs: ignore all markdown except shipped docs and mkdocs site
+*.md
+!README.md
+!CHANGELOG.md
+!docs/**/*.md
+site/
+tests/regenerate_*.py
+tests/seed_test_media.py
+tests/create_session.py
+
+# Dev environments
+.venv/
+.claude/
+.playwright-mcp/
+.playwright-cli/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Separate repos
+observatory/
+
+# Dev screenshots/videos (docs assets live in docs/assets/)
+/*.png
+/*.mp4
+
+# Branding assets (not tracked)
+branding/
