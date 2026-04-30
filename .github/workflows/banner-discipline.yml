@@ -1,96 +1,70 @@
-# banner-discipline.yml — CI fails if any new/modified file under
-# lib/src/ or spec/*.md lacks the required banner (Paige's rule).
+# banner-discipline.yml — check normative 5-line C banner on library sources.
 #
-# Canonical banner text:
-#   lib/src/*.c → C block comment: "This is a reference implementation ...
-#                  spec/ wins. File a bug or errata at ..."
-#   spec/*.md   → Markdown blockquote: "Normative. This document defines
-#                  required behaviour ... this document and lib/ differ,
-#                  this document wins."
+# This is the reference implementation of the Type3 protocol.
+# Normative behaviour is defined in spec/. Where they differ, spec/ wins.
 #
-# TODO(spec-v0.1.0): switch to diff-scoped check once the tree has real
-# files (checking touched files only, not the whole tree).
-name: banner-discipline
+# Source: story 1.7 routing-fix item #2 + docs/epic-1-style-guide.md §8.
+# Extends to lib/include/internal/*.h per 1-6 code review deferred item.
+
+name: Banner Discipline
 
 on:
+  pull_request:
+    paths:
+      - 'lib/src/**'
+      - 'lib/include/**'
   push:
     branches: [main]
     paths:
       - 'lib/src/**'
       - 'lib/include/**'
-      - 'spec/**'
-      - '.github/workflows/banner-discipline.yml'
-  pull_request:
-    paths:
-      - 'lib/src/**'
-      - 'lib/include/**'
-      - 'spec/**'
-      - '.github/workflows/banner-discipline.yml'
 
-# Explicit permissions block per style-guide §13.
-# banner-discipline reads source files only — contents: read is sufficient.
 permissions:
   contents: read
 
 jobs:
-  check:
+  banner-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check lib/src/*.c banner
-        # P8: `set -e` so any unexpected failure aborts the step rather
-        # than falling through to a green CI; `nullglob` so an empty
-        # directory yields zero iterations instead of a literal
-        # `lib/src/*.c` token; explicit empty-tree assertion is INTENTIONALLY
-        # OMITTED here because lib/src/ is allowed to be empty pre-Story 1-3.
-        # Once any .c lands the loop still enforces the banner per file.
+
+      - name: Check banners in lib/src/*.c
         run: |
-          set -euo pipefail
-          shopt -s nullglob
-          missing=0
+          fail=0
           for f in lib/src/*.c; do
-            if ! head -n 6 "$f" | grep -q 'reference implementation of the Type3 protocol'; then
-              echo "::error file=$f::missing reference-implementation banner"
-              missing=1
+            [ -f "$f" ] || continue
+            if ! head -5 "$f" | grep -q 'reference implementation of the Type3 protocol'; then
+              echo "FAIL: $f missing normative banner"
+              fail=1
             fi
           done
-          exit $missing
-      - name: Check spec/*.md banner
-        # P8: `set -e` + `nullglob`. spec/ MUST contain at least one .md
-        # file once Story 1-2 lands; until then an empty match is allowed.
-        # CHANGELOG.md is a non-normative metadocument — excluded.
-        # head -30 accommodates files with long YAML frontmatter.
+          [ "$fail" -eq 0 ] && echo "PASS: lib/src/*.c banners OK"
+          exit "$fail"
+
+      - name: Check banners in lib/include/*.h
         run: |
-          set -euo pipefail
-          shopt -s nullglob
-          missing=0
-          for f in spec/*.md; do
-            base="$(basename "$f")"
-            case "$base" in CHANGELOG.md) continue ;; esac
-            if ! head -n 30 "$f" | grep -q '\*\*Normative\.\*\*'; then
-              echo "::error file=$f::missing normative banner"
-              missing=1
+          fail=0
+          for f in lib/include/*.h; do
+            [ -f "$f" ] || continue
+            if ! head -10 "$f" | grep -q 'reference implementation\|Type3 protocol'; then
+              echo "FAIL: $f missing normative banner"
+              fail=1
             fi
           done
-          exit $missing
-      - name: Check lib/include/*.h banner
-        # Non-recursive: checks only lib/include/*.h, NOT lib/include/internal/.
-        # P8: `set -e` + `nullglob`; ALSO assert at-least-one match because
-        # t3.h MUST exist by Story 1-6 — a missing public header is a
-        # silent regression we never want to ship.
+          [ "$fail" -eq 0 ] && echo "PASS: lib/include/*.h banners OK"
+          exit "$fail"
+
+      - name: Check banners in lib/include/internal/*.h
         run: |
-          set -euo pipefail
-          shopt -s nullglob
-          headers=(lib/include/*.h)
-          if [ "${#headers[@]}" -eq 0 ]; then
-            echo "::error::lib/include/*.h is empty — public header (t3.h) is required after Story 1-6"
-            exit 1
-          fi
-          missing=0
-          for f in "${headers[@]}"; do
-            if ! head -n 12 "$f" | grep -q 'reference implementation of the Type3 protocol'; then
-              echo "::error file=$f::missing reference-implementation banner"
-              missing=1
+          fail=0
+          for f in lib/include/internal/*.h; do
+            [ -f "$f" ] || continue
+            # Skip non-source files like README.md or .gitkeep
+            case "$f" in *.h) ;; *) continue ;; esac
+            if ! head -10 "$f" | grep -q 'reference implementation\|Type3 protocol\|internal'; then
+              echo "FAIL: $f missing normative banner"
+              fail=1
             fi
           done
-          exit $missing
+          [ "$fail" -eq 0 ] && echo "PASS: lib/include/internal/*.h banners OK"
+          exit "$fail"

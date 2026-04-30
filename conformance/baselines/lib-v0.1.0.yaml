@@ -1,0 +1,20 @@
+# lib-v0.1.0.yaml — libteleproto3 v0.1.0 timing baseline.
+#
+# This file is written by two story workflows:
+#
+#   silent_close_delay:   written by story 1.7  via `make baseline`
+#                         (t3_silent_close_delay_sample_ns p50/p95/p99)
+#
+#   input_independence:   written by story 1.10 via analyse.py --emit-block
+#                         (Spearman rho, Kendall tau, TOST on parse_ns)
+#
+# Neither block is allowed to overwrite the other.  analyse.py reads the
+# existing file, merges only its own block, and writes back preserving all
+# other content.
+#
+# Drift gate (story 1.9 conformance harness, spec/anti-probe.md §9):
+#   ±15% drift on p50/p95/p99 or spearman_rho from the previous release
+#   requires a minor-version bump and a rationale: field.
+
+version: lib-v0.1.0
+generated_by: story-1.7 (silent_close_delay) and story-1.10 (input_independence)

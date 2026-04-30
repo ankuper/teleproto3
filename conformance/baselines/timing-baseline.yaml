@@ -1,0 +1,28 @@
+schema_version: 1
+artefact: lib-v0.1.0
+toolchain:
+  compiler: "(see make output)"
+  cflags: "-std=gnu11 -O2 -DNDEBUG -fvisibility=hidden -fPIC"
+  host_triple: "(see make output)"
+  kernel: "(see make output)"
+silent_close_delay:
+  p50_ns: 125059499
+  p95_ns: 192671381
+  p99_ns: 198477332
+  samples_total: 50000
+  buckets: ["0-63", "64-255", "256-1023", "1024-4095", "4096-16383"]
+tost:
+  delta_ms: 2
+  alpha: 0.05
+  n_per_bucket: 10000
+  pairs_equivalent: 10
+  pairs_total: 10
+  passed: true
+spearman:
+  n: 50000
+  rho: 0.001988
+  ci95_low: 0.0
+  ci95_high: 0.0
+  threshold: 0.1
+  passed: true
+underpowered: false
