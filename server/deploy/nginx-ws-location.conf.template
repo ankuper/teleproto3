@@ -1,0 +1,58 @@
+# teleproxy v2 WebSocket location — for use in nginx http{} server{} block.
+# Path: ${WS_PATH} (configurable, default: random path for camouflage)
+#
+# IMPORTANT: nginx http{} proxy_pass does NOT support sending PROXY protocol
+# headers to the backend (proxy_protocol is only available in stream{} module).
+# This template forwards the real client IP via X-Real-IP / X-Forwarded-For
+# HTTP headers instead.  teleproxy reads PROXY_PROTOCOL from environment;
+# when behind this nginx template, set PROXY_PROTOCOL=false (default for
+# direct-to-http-proxy setups).  See INSTALL-NGINX.md for full details.
+#
+# Usage:
+#   1. Replace ${WS_PATH} with your chosen WebSocket path (e.g. /ws).
+#   2. Include inside your nginx `server {}` block (TLS already configured):
+#        include /etc/nginx/snippets/teleproxy-ws-location.conf;
+#   3. See INSTALL-NGINX.md for full instructions.
+
+# Rate limiting — 30 r/s per IP, burst 50 (FR21).
+# The limit_req_zone is defined in teleproxy-ws-map.conf (http{} context).
+
+location ${WS_PATH} {
+    limit_req zone=teleproxy_ws burst=50 nodelay;
+
+    proxy_pass         http://127.0.0.1:3130;
+    proxy_http_version 1.1;
+
+    # WebSocket upgrade headers.
+    proxy_set_header   Upgrade    $http_upgrade;
+    proxy_set_header   Connection $connection_upgrade;
+
+    # Preserve original Host header (required for fake-TLS SNI matching).
+    proxy_set_header   Host              $host;
+
+    # Forward real client IP (plain HTTP headers path; see PROXY protocol below).
+    proxy_set_header   X-Real-IP         $remote_addr;
+    proxy_set_header   X-Forwarded-For   $remote_addr; # Avoid spoofing
+
+    # Disable buffering — MTProto is a streaming protocol; frames must not be buffered.
+    proxy_buffering    off;
+
+    # Generous timeouts for long-lived WebSocket connections (86400s = 24 h).
+    proxy_read_timeout  86400s;
+    proxy_send_timeout  86400s;
+    proxy_connect_timeout 10s;
+
+    # Client IP propagation note:
+    # nginx http{} proxy_pass does NOT support PROXY protocol to the backend
+    # (that requires the stream{} module).  We forward the real IP via
+    # X-Real-IP and X-Forwarded-For.  teleproxy should be configured with
+    # PROXY_PROTOCOL=false when using this template.
+}
+
+# Catch-all: unknown paths return 404 (FR20).
+# Add the following block ONLY if your existing server {} does not already have
+# a default location or catch-all. Omit it if one already exists.
+#
+# location / {
+#     return 404;
+# }
