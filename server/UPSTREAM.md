@@ -1,22 +1,23 @@
 # Upstream subtree log
 
 `server/` is a `git subtree` of:
-- **Primary (active upstream):** `github.com/teleproxy/teleproxy`
-  (branch: `master`) — the community-maintained continuation of the
-  original `TelegramMessenger/MTProxy` (which is archived upstream).
-- **Intermediate (fork with WS transport):** `github.com/ankuper/teleproxy`
-  (branch: `feat/websocket-transport`) — carries the Type3 v1
-  WebSocket transport patches (proposal `teleproxy/teleproxy#69`) that
-  landed before monorepo consolidation.
+- **Active upstream:** `github.com/ankuper/teleproxy`
+  (branch: `feat/websocket-transport`) — our fork carrying the Type3
+  WebSocket transport (RFC 6455). This is the permanent working upstream;
+  all routine subtree pulls target this branch.
+- **Occasional sync source:** `github.com/teleproxy/teleproxy`
+  (branch: `master`) — community-maintained continuation of the archived
+  `TelegramMessenger/MTProxy`. Pull from here only when it contains
+  relevant security fixes or DC-table updates not yet in our fork.
 
 Historical note: `TelegramMessenger/MTProxy` is the archived ancestor
-repo. `teleproxy/teleproxy` picked up maintenance after Telegram
-stopped updating the official repo. This file tracks the ACTIVE
-upstream only.
+repo. `ankuper/teleproxy feat/websocket-transport` is our fork with
+Type3 WS transport added. The upstream PR (`teleproxy/teleproxy#69`)
+was closed without merge — the patches live here permanently.
 
 ## Current pin
 
-<!-- pin-sha: 0000000000000000000000000000000000000000 -->
+<!-- pin-sha: a7fff27232176186c7f2942bbd84cf18211b9dda -->
 
 Machine-parseable sentinel above holds the 40-hex-character commit SHA of
 the last upstream subtree pull. Extract with:
@@ -36,18 +37,18 @@ lands (style-guide §7 server caveat: scaffold-time placeholder dirs).
 ## Pull procedure
 
 ```sh
-# First-time import (already executed during scaffold):
-# git subtree add --prefix=server/ \
-#     git@github.com:teleproxy/teleproxy.git master --squash
+# First-time import (already executed — Story 4-1):
+# git read-tree / rsync procedure — see Story 4-1 Dev Notes
+# (ankuper/teleproxy feat/websocket-transport via local file:// mirror)
 
-# Subsequent pulls (active upstream):
+# Subsequent pulls (active upstream — use this for routine updates):
 git subtree pull --prefix=server/ \
-    git@github.com:teleproxy/teleproxy.git master --squash
+    git@github.com:ankuper/teleproxy.git feat/websocket-transport --squash
 
-# Intermediate (only during the initial consolidation, to fold in the
-# fork-local WebSocket transport patches — not a recurring operation):
+# Occasional sync from community upstream (security fixes, DC table):
+# Only when teleproxy/teleproxy master has relevant commits not in ankuper.
 # git subtree pull --prefix=server/ \
-#     git@github.com:ankuper/teleproxy.git feat/websocket-transport --squash
+#     git@github.com:teleproxy/teleproxy.git master --squash
 ```
 
 Never edit files under `server/common/`, `server/crypto/`, `server/jobs/`,
@@ -94,8 +95,7 @@ Each subtree pull appends an entry here. Use the template below.
 ## 2026-04-27 — pulled a7fff272
 
 - Upstream SHA: a7fff27232176186c7f2942bbd84cf18211b9dda
-- Branch: feat/websocket-transport (WebSocket transport patches for Type3 protocol,
-  local path: /Volumes/BuildCache/teleproxy via file:// remote teleproxy-upstream)
+- Branch: feat/websocket-transport (local mirror: teleproxy/ workspace symlink via file:// remote teleproxy-upstream)
 - Merge mode: selective `git read-tree --prefix` into empty subdirs +
   `rsync --ignore-existing` for net/ (Option (c) per story 1-8 Dev Notes)
 - Conflicts: none — target dirs were empty placeholders; fork-local
@@ -104,3 +104,22 @@ Each subtree pull appends an entry here. Use the template below.
   Pull procedure: subtree pull --prefix=server/ with teleproxy-upstream remote.
 - Tests run after pull: build pending (story 1-8 Task 2 wires the Makefile;
   pre-wire build expected to fail — by design per UPSTREAM.md lines 67–71)
+
+---
+
+## 2026-04-28 — pulled a7fff272 (Story 4-1 re-import)
+
+- Upstream SHA: a7fff27232176186c7f2942bbd84cf18211b9dda
+- Branch: feat/websocket-transport (local mirror: teleproxy/ workspace symlink via file:// remote teleproxy-upstream)
+- Merge mode: selective `git read-tree --prefix` into empty subdirs (common/, crypto/, jobs/, mtproto/) +
+  `git read-tree --prefix=net/upstream-tmp/ + rsync --ignore-existing` for net/ +
+  `git show` for root-level blobs (Makefile, Dockerfile, start.sh, etc.) with --ignore-existing for fork-local files.
+  Note: upstream sources are under src/ (not repo root) — all read-tree paths use `src/<dir>` prefix.
+- Conflicts: none — all target dirs were empty after revert (95f413d); fork-local files
+  (.env.example, docker-compose.behind-nginx.yml, UPSTREAM.md, tests/) preserved via omission.
+- Resolution notes: engine/ and vv/ included (both required by Makefile and headers).
+  Prior successful import 8e12b10 was reverted at 95f413d; this re-import is permanent.
+  Story: 4-1 (subtree import + upstream rebase baseline).
+- Tests run after pull: Docker build PASSED — full multi-stage build produces runtime image
+  teleproxy:ws-4.1. Binary starts: "Invoking engine teleproxy-unknown compiled Apr 28 2026"
+  confirmed. proxy-secret downloaded from core.telegram.org. AC#4 + AC#5 satisfied.

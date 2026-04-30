@@ -1,0 +1,119 @@
+# upstream-sync.yml — AR-S15 weekly upstream-rebase scaffold.
+# Cron opens a draft PR with the upstream delta against the current pin.
+# Uses HTTPS (NOT SSH) because ubuntu-latest runners have no SSH key.
+# UPSTREAM.md keeps SSH form documented for local-dev convenience.
+name: upstream-sync
+
+on:
+  schedule:
+    # Monday 09:00 UTC — AR-S15 weekly cadence.
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write        # required for branch pushes via gh
+  pull-requests: write   # required for gh pr create
+  issues: write          # required for gh issue create on conflict paths
+
+concurrency:
+  group: upstream-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  UPSTREAM_HTTPS: https://github.com/teleproxy/teleproxy.git
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute drift
+        id: drift
+        run: |
+          # POSIX-portable; ubuntu-latest has GNU grep; pattern is also BSD-grep-clean.
+          # Extracts the 40-char hex SHA from the pin-sha sentinel line.
+          PIN=$(grep -oE '<!-- pin-sha: [0-9a-f]{40} -->' \
+              server/UPSTREAM.md 2>/dev/null \
+              | sed 's/.*pin-sha: \([0-9a-f]\{40\}\) .*/\1/')
+          echo "pin=$PIN" >> "$GITHUB_OUTPUT"
+
+          # Compute days since pin was last updated (heuristic: commit date of UPSTREAM.md)
+          if [ -n "$PIN" ] && [ "$PIN" != "0000000000000000000000000000000000000000" ]; then
+            LAST_UPDATE=$(git log --follow --format='%ct' -- server/UPSTREAM.md | head -1)
+            [ -z "$LAST_UPDATE" ] && LAST_UPDATE=$(date +%s)
+            NOW=$(date +%s)
+            DAYS=$(( (NOW - LAST_UPDATE) / 86400 ))
+          else
+            DAYS=0
+          fi
+          echo "drift_days=$DAYS" >> "$GITHUB_OUTPUT"
+
+      - name: Pull upstream subtree
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name  "GitHub Actions"
+          git subtree pull --prefix=server/ \
+              "$UPSTREAM_HTTPS" master --squash || { git merge --abort || true; exit 1; }
+
+      - name: Open draft PR
+        id: pr
+        run: |
+          BRANCH="chore/upstream-sync-$(date -u +%Y-%m-%d)"
+          git checkout -b "$BRANCH" || git checkout "$BRANCH"
+          git push -u origin "$BRANCH" || true
+
+          # Build PR body — idempotent drift-warning sentinel
+          BODY="Automated upstream sync from \`teleproxy/teleproxy\`.\n\nSee \`server/UPSTREAM.md\` for pin-sha and pull-log template.\nSee \`docs/glossary-map.md\` for the normative cross-fork doc-sync glossary mapping."
+          if [ "${{ steps.drift.outputs.drift_days }}" -gt 14 ]; then
+            BODY="<!-- drift-warning: present -->\n⚠️ **Drift warning:** upstream pin is ${{ steps.drift.outputs.drift_days }} days old.\n\n${BODY}"
+          fi
+
+          # gh pr create is idempotent-safe (exits 0 if PR already open)
+          gh pr create --draft \
+              --title "chore: upstream sync $(date -u +%Y-%m-%d)" \
+              --body "$(printf '%b' "$BODY")" \
+              --base main \
+              --head "$BRANCH" || true
+
+          # Return PR URL for subsequent steps
+          PR_URL=$(gh pr view "$BRANCH" --json url --jq '.url' 2>/dev/null || echo "")
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Inject drift-warning idempotently (>14d)
+        if: steps.drift.outputs.drift_days != '' && steps.drift.outputs.drift_days > 14
+        run: |
+          BRANCH="chore/upstream-sync-$(date -u +%Y-%m-%d)"
+          # Only inject if sentinel is absent from PR body — no-append on re-run.
+          EXISTING_BODY=$(gh pr view "$BRANCH" --json body --jq '.body' 2>/dev/null || echo "")
+          if [ -z "$EXISTING_BODY" ]; then
+            echo "No PR exists yet, skipping edit."
+            exit 0
+          fi
+          if echo "$EXISTING_BODY" | grep -q '<!-- drift-warning: present -->'; then
+            echo "Drift-warning sentinel already present — no-op."
+          else
+            NEW_BODY="<!-- drift-warning: present -->\n⚠️ **Drift warning:** upstream pin is ${{ steps.drift.outputs.drift_days }} days old (>${{ '14' }} day threshold).\n\nPlease review and merge promptly per AR-S15.\n\n${EXISTING_BODY}"
+            gh pr edit "$BRANCH" --body "$(printf '%b' "$NEW_BODY")"
+          fi
+
+      - name: File drift issue if >30d (idempotent)
+        if: steps.drift.outputs.drift_days != '' && steps.drift.outputs.drift_days > 30
+        run: |
+          # Check for existing open issue before creating (idempotency)
+          EXISTING=$(gh issue list \
+              --label priority/sync-drift \
+              --state open \
+              --json number --jq 'length' 2>/dev/null || echo 0)
+          if [ "$EXISTING" -eq 0 ]; then
+            gh issue create \
+                --label priority/sync-drift \
+                --title "sync-drift: upstream pin is ${{ steps.drift.outputs.drift_days }}d old (>30d release blocker)" \
+                --body "Upstream pin in \`server/UPSTREAM.md\` has not been updated in ${{ steps.drift.outputs.drift_days }} days. This exceeds the AR-S15 30-day release-blocker threshold. Please review and merge the upstream-sync draft PR."
+          else
+            echo "Open sync-drift issue already exists — no-op."
+          fi
