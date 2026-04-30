@@ -1,0 +1,41 @@
+##
+## teleproxy behind existing nginx — WS (Type3) mode.
+##
+## nginx terminates TLS on :443, reverse-proxies WebSocket to teleproxy on 3130.
+## This compose file exposes ONLY 127.0.0.1:3130 (loopback) and 127.0.0.1:8888 (stats).
+##
+## Usage:
+##   1. Copy .env.example → .env, fill in SECRET and EXTERNAL_IP.
+##   2. docker compose -f docker-compose.behind-nginx.yml up -d
+##   3. Add nginx location block (see deploy-teleproxy-nginx.md).
+##
+
+services:
+  teleproxy:
+    image: ghcr.io/ankuper/teleproxy:ws-latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: teleproxy
+    network_mode: host          # host networking — nginx connects to 127.0.0.1:3130
+    environment:
+      - SECRET=${SECRET}
+      - PORT=3130               # WS listen port — nginx proxies here
+      - DIRECT_MODE=true        # direct connection to DCs, skip ME relay
+      - STATS_PORT=8888
+      - WORKERS=1
+      - EXTERNAL_IP=${EXTERNAL_IP:-}
+      # Enable PROXY protocol parsing so nginx can propagate the real client IP.
+      # nginx must have `proxy_protocol on;` in the WebSocket proxy_pass location
+      # (see deploy/nginx-ws-location.conf.template).  Set to false or remove if
+      # nginx is NOT configured to send PROXY protocol headers.
+      - PROXY_PROTOCOL=${PROXY_PROTOCOL:-true}
+    volumes:
+      - ./data:/opt/teleproxy/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8888/stats || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

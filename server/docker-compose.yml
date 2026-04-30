@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  teleproxy:
+    build: .
+    platform: linux/amd64
+    ports:
+      - "443:443"
+      - "8888:8888"
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    environment:
+      # Generate a random secret: head -c 16 /dev/urandom | xxd -ps
+      - SECRET=${SECRET:-}
+      # Port for client connections
+      - PORT=443
+      # Port for statistics
+      - STATS_PORT=8888
+      # Number of workers
+      - WORKERS=1
+      # Proxy tag from @MTProxybot
+      - PROXY_TAG=${PROXY_TAG:-}
+      # Enable random padding (true/false)
+      - RANDOM_PADDING=${RANDOM_PADDING:-false}
+      # Domain for Fake-TLS + Padding
+      - EE_DOMAIN=${EE_DOMAIN:-}
+      # Path (inside container) to CIDR blocklist file
+      - IP_BLOCKLIST=${IP_BLOCKLIST:-}
+      # Path (inside container) to CIDR allowlist file
+      - IP_ALLOWLIST=${IP_ALLOWLIST:-}
+    volumes:
+      # Persist config files
+      - ./data:/opt/teleproxy/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${STATS_PORT:-8888}/stats || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
