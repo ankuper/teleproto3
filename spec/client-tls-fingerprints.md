@@ -69,13 +69,13 @@ GREASE values excluded. MD5 of the comma-semicolon-delimited string above.
 | Extension count | `12` | 12 extensions, GREASE excluded |
 | ALPN first value | `0000` | no ALPN extension in this `ClientHello` |
 | Cipher hash | `c19c562a80bc` | first 12 chars of SHA-256 of sorted cipher IDs (hex, comma-separated) |
-| Extension hash | `b7756960ef11` | first 12 chars of SHA-256 of sorted ext type IDs, SNI (0) excluded from hash |
+| Extension hash | `b7756960ef11` | first 12 chars of SHA-256 of sorted ext type IDs, SNI (0) and ALPN (16) excluded from hash per FoxIO JA4 spec |
 
 Sorted ciphers (hex, for hash):
 `002f,0033,0035,0039,003c,003d,0067,006b,008c,008d,0090,0091,0094,0095,009c,009d,009e,009f,00a8,00a9,00aa,00ab,00ac,00ad,00ae,00af,00b2,00b3,00b6,00b7,1301,1302,1303,c009,c00a,c013,c014,c023,c024,c027,c028,c02b,c02c,c02f,c030,c035,c036,c037,c038,cca8,cca9,ccaa,ccab,ccac,ccad,ccae`
 
-Sorted ext types for hash (SNI=0 excluded):
+Sorted ext types for hash (SNI=0 and ALPN=16 excluded per FoxIO JA4 spec):
 `11,13,22,23,27,35,43,45,51,65281`
 
 > Note: `renegotiation_info` (65281) sorts last numerically. `compress_certificate` (27) is
-> included. No ALPN (16) present, so no ALPN exclusion applies.
+> included. ALPN (16) is excluded per FoxIO spec but was not present in this capture anyway.
