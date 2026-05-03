@@ -1,0 +1,25 @@
+# KDF Known-Answer Tests for Type3 protocol (spec/wire-format.md §4.2).
+# Story 1-12 authority — Linux is the reference platform.
+#
+# Format (tab-separated):
+#   <id>  <random_header_hex_128>  <secret_key_hex_32>
+#
+# random_header: 64 bytes (128 hex chars) — client-generated per-session nonce
+# secret_key:    16 bytes  (32 hex chars) — from parsed Type3 secret blob
+#
+# KDF derivation (normative, wire-format.md §4.2):
+#   read_key  = SHA256(random_header[8:40]           || secret_key)  -> 32 bytes
+#   read_iv   = random_header[40:56]                                  -> 16 bytes
+#   write_key = SHA256(reverse(random_header[24:56]) || secret_key)  -> 32 bytes
+#   write_iv  = reverse(random_header[8:24])                         -> 16 bytes
+#
+# Reference hash in linux-reference.sha256:
+#   SHA256(read_key || read_iv || write_key || write_iv)             -> 32 bytes
+#
+# Slices use Python half-open notation; all indices in bytes.
+# reverse() = byte reversal (no bit reversal).
+kdf-001	00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000	00000000000000000000000000000000
+kdf-002	01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101	02020202020202020202020202020202
+kdf-003	000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f	ffffffffffffffffffffffffffffffff
+kdf-004	ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff	55555555555555555555555555555555
+kdf-005	aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55	000102030405060708090a0b0c0d0e0f

@@ -1,0 +1,10 @@
+# teleproto3/lib/.cppcheck-suppressions
+# cppcheck suppression file for lib/ only.
+# DO NOT inherit or include teleproto3/server/.cppcheck-suppressions here.
+#
+# Format: <check-id>:<file>:<line>
+# Each entry MUST carry a justification comment on the line above it.
+# Reference: https://cppcheck.sourceforge.io/manual.html#suppressing-warnings
+#
+# Currently empty — lib/ is clean from scratch.
+# Add entries ONLY when a false positive is confirmed; justify inline.
