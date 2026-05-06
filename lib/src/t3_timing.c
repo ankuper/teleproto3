@@ -14,7 +14,7 @@
 #include <stdint.h>
 #include <limits.h>
 
-__attribute__((visibility("hidden")))
+T3_HIDDEN
 int t3_timing_rejection_sample_uniform_ns(const t3_callbacks_t *cb,
                                           uint64_t lo_ns, uint64_t hi_ns,
                                           uint64_t *out_ns) {

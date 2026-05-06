@@ -1,3 +1,4 @@
+# DEPRECATED 2026-05-03 — see ../CMakeLists.txt; retained one release for downstream consumers mid-migration.
 # libteleproto3 — POSIX Make build.
 #
 # This is the reference implementation of the Type3 protocol.

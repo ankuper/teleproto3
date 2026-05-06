@@ -13,6 +13,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "t3.h"
+#include "t3_platform.h"
 #include "retry.h"
 
 struct t3_session {
@@ -29,7 +30,7 @@ struct t3_session {
     uint64_t           last_close_ns;
 };
 
-__attribute__((visibility("hidden")))
+T3_HIDDEN
 t3_result_t t3_session_handle_header_byte(t3_session_t *s, uint8_t b);
 
 #endif /* T3_INTERNAL_SESSION_H */

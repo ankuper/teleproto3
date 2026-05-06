@@ -1,3 +1,4 @@
+# DEPRECATED 2026-05-03 — see ../CMakeLists.txt; retained one release for downstream consumers mid-migration.
 # BUILD.bazel — Bazel 7 build for libteleproto3.
 #
 # This is the reference implementation of the Type3 protocol.

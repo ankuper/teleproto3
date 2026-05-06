@@ -3,6 +3,7 @@ lib/build/*.o
 lib/build/*.a
 lib/build/test_*
 lib/build/*.dSYM
+lib/cmake-build/
 
 # Secrets and runtime data
 server/.env

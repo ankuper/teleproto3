@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include "t3.h"
+#include "t3_platform.h"
 
 typedef struct {
     uint64_t slots[8];
@@ -21,11 +22,11 @@ typedef struct {
 
 struct t3_session;
 
-__attribute__((visibility("hidden")))
+T3_HIDDEN
 t3_retry_state_t t3_retry_ring_record(struct t3_session *s, uint64_t now_monotonic_ns);
-__attribute__((visibility("hidden")))
+T3_HIDDEN
 t3_retry_state_t t3_retry_ring_get(const struct t3_session *s);
-__attribute__((visibility("hidden")))
+T3_HIDDEN
 t3_result_t      t3_retry_ring_user_retry(struct t3_session *s);
 
 #endif /* T3_INTERNAL_RETRY_H */

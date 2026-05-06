@@ -18,7 +18,7 @@
 #define NS30  (30ULL  * 1000000000ULL)
 #define NS5MIN (5ULL * 60ULL * 1000000000ULL)
 
-__attribute__((visibility("hidden")))
+T3_HIDDEN
 t3_retry_state_t t3_retry_ring_record(struct t3_session *s, uint64_t now_ns) {
     t3_retry_ring_t *r = &s->ring;
 
@@ -65,10 +65,10 @@ t3_retry_state_t t3_retry_ring_record(struct t3_session *s, uint64_t now_ns) {
     return s->state;
 }
 
-__attribute__((visibility("hidden")))
+T3_HIDDEN
 t3_retry_state_t t3_retry_ring_get(const struct t3_session *s) { return s->state; }
 
-__attribute__((visibility("hidden")))
+T3_HIDDEN
 t3_result_t t3_retry_ring_user_retry(struct t3_session *s) {
     if (s->state != T3_RETRY_TIER3) return T3_ERR_INVALID_ARG;
     memset(&s->ring, 0, sizeof(s->ring));

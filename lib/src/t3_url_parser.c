@@ -15,6 +15,7 @@
  */
 
 #include "t3.h"
+#include "internal/t3_platform.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
@@ -57,7 +58,7 @@ static char *query_param(const char *query, const char *key) {
     return NULL;
 }
 
-__attribute__((visibility("hidden")))
+T3_HIDDEN
 t3_result_t t3_url_parse(const char *url, size_t len, t3_secret_t **out) {
     if (!out) return T3_ERR_INVALID_ARG;
     *out = NULL;
