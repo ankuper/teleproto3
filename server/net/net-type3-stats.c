@@ -19,6 +19,7 @@
 #include <fcntl.h>
 
 #include "net-type3-stats.h"
+#include "net-proxy-protocol.h"
 #include "common/kprintf.h"
 
 /* ------------------------------------------------------------------ *
@@ -134,6 +135,15 @@ static int build_prom_body(char *buf, size_t bufsz) {
     TRY(prom_counter(p, end, "teleproto3_probe_drop_duration_ns", "quantile", "0.99", type3_stats.probe_drop_p99_ns));
     TRY(prom_counter(p, end, "teleproto3_probe_drop_duration_ns_count", NULL, NULL,   type3_stats.probe_drop_count));
     TRY(prom_counter(p, end, "teleproto3_probe_drop_duration_ns_sum",   NULL, NULL,   type3_stats.probe_drop_sum_ns));
+
+    /* proxy_protocol_connections_total / proxy_protocol_errors_total
+     * Globals declared in net-proxy-protocol.h, incremented by the parser
+     * in net-tcp-rpc-ext-server.c. Exported here so the E2E test can verify
+     * PROXY-protocol header parsing via /metrics scrape (story 2.10 AC#1). */
+    TRY(prom_counter(p, end, "proxy_protocol_connections_total", NULL, NULL,
+                     (uint64_t)proxy_protocol_connections_total));
+    TRY(prom_counter(p, end, "proxy_protocol_errors_total",      NULL, NULL,
+                     (uint64_t)proxy_protocol_errors_total));
 
 #undef TRY
 

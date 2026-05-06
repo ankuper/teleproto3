@@ -44,3 +44,26 @@ strings:
     ru: "Сообщить о проблеме"
     fa: "گزارش مشکل"
     zh: "报告问题"
+
+  # story 2.6: tier-3 toast — the ONLY Type3-specific user-visible copy per UX-DR30.
+  # Ban-list clean: none of en/ru/fa/zh contain the seven banned tokens.
+  ui.tier3-toast:
+    en: "Connection unstable. Tap to choose a different server or use direct connection."
+    ru: "Соединение нестабильно. Нажмите, чтобы выбрать другой сервер или прямое подключение."
+    fa: "اتصال ناپایدار است. برای انتخاب سرور دیگر یا اتصال مستقیم، ضربه بزنید."
+    zh: "连接不稳定。点击以选择其他服务器或直接连接。"
+
+  # story 2.6 (via story 2.4 Dev Notes): single tappable action label on tier-3 toast.
+  ui.tier3-action-switch:
+    en: "Choose"
+    ru: "Выбрать"
+    fa: "انتخاب"
+    zh: "选择"
+
+  # story 2.6 (via story 2.4 PREREQUISITE): shown when OS-native secure storage is unavailable.
+  # Ban-list clean: no banned tokens in any locale.
+  ui.secure-storage-unavailable:
+    en: "Secure storage unavailable"
+    ru: "Безопасное хранилище недоступно"
+    fa: "حافظهٔ امن در دسترس نیست"
+    zh: "安全存储不可用"
