@@ -63,9 +63,9 @@ t3_result_t t3_csprng_bytes(uint8_t *buf, size_t len) {
             if (errno == EAGAIN) {
                 /*
                  * Entropy pool not yet seeded (very early boot).
-                 * Fall back to /dev/urandom which blocks until seeded.
+                 * Return error immediately to prevent returning weak entropy.
                  */
-                return urandom_fill(buf + done, len - done);
+                return T3_ERR_RNG;
             }
             return T3_ERR_RNG;
         }
