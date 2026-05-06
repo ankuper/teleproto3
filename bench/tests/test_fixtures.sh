@@ -63,7 +63,7 @@ fi
 # ---------------------------------------------------------------------------
 check_size() {
     local name="$1" file="$2" expected="$3"
-    printf '--- %s ---\n' "$name"
+    printf '%s\n' "--- ${name} ---"
     if [ ! -f "$file" ]; then
         fail "$name" "$file not found"
         return
