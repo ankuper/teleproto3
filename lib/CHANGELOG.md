@@ -8,6 +8,24 @@ declares the `spec-vX.Y.Z` range it implements — see `VERSION`.
 
 <!-- Future lib-v0.1.x patch entries go here. -->
 
+## [lib-v0.1.1] — 2026-05-06
+
+### Added
+- `command_type=0x04` (`T3_CMD_BENCH`) — experimental dev-only command for in-channel bench echo.
+  Server dispatch must be build-flag-gated; see Epic 1a. (Stories 1a-1 through 1a-3.)
+- Named `#define` constants `T3_CMD_MTPROTO_PASSTHROUGH`, `T3_CMD_HTTP_DECOY_MIMIC`,
+  `T3_CMD_BENCH` in `t3.h` — documents the full `command_type` registry in one place.
+
+### Changed
+- `t3_header_parse()` now accepts `command_type=0x04` at `version=0x01` and returns `T3_OK`.
+  Previously all values other than `0x01` were `MALFORMED` at known version. The change is
+  additive: `0x01` behaviour and all rejection paths are unchanged.
+
+### Stability note
+ABI additive patch — no existing function signature, field layout, or enumerant value is
+modified. `T3_ABI_VERSION_PATCH` bumped `0 → 1`; consumers that pinned to `0.1.0` MUST
+update their `_Static_assert` to `0.1.1` (one-line edit, no ABI incompatibility).
+
 ## [lib-v0.1.0] — 2026-04-24
 
 ### Added

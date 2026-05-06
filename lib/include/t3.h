@@ -30,14 +30,24 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
-/* T3_API — public-symbol export marker. */
-#if defined(_WIN32) && !defined(__CYGWIN__)
+/* T3_API — public-symbol export marker.
+ *
+ * MSVC (Story 1-11): _MSC_VER detection gates __declspec.
+ *   T3_STATIC_LIB  — propagated by CMake to consumers of the static archive;
+ *                    suppresses all decoration (no dllexport/dllimport needed).
+ *   T3_CONSUMER    — define before including t3.h when linking the DLL from
+ *                    a consumer translation unit (future shared-library scope).
+ *   default        — building the library itself → dllexport.
+ *
+ * GCC/Clang/Cygwin: __attribute__((visibility("default"))) unchanged.
+ */
+#if defined(_MSC_VER)
 #  if defined(T3_STATIC_LIB)
 #    define T3_API
-#  elif defined(T3_BUILDING_DLL)
-#    define T3_API __declspec(dllexport)
-#  else
+#  elif defined(T3_CONSUMER)
 #    define T3_API __declspec(dllimport)
+#  else
+#    define T3_API __declspec(dllexport)
 #  endif
 #elif defined(__GNUC__) || defined(__clang__) || defined(__CYGWIN__)
 #  define T3_API __attribute__((visibility("default")))
@@ -47,11 +57,11 @@ extern "C" {
 
 #define T3_LIB_VERSION_MAJOR 0
 #define T3_LIB_VERSION_MINOR 1
-#define T3_LIB_VERSION_PATCH 0
+#define T3_LIB_VERSION_PATCH 1
 
 #define T3_ABI_VERSION_MAJOR 0
 #define T3_ABI_VERSION_MINOR 1
-#define T3_ABI_VERSION_PATCH 0
+#define T3_ABI_VERSION_PATCH 1
 
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__cplusplus)
 #  if !defined(T3_LIB_VERSION_MAJOR) || !defined(T3_LIB_VERSION_MINOR) || !defined(T3_LIB_VERSION_PATCH)
@@ -137,9 +147,19 @@ typedef struct {
     uint16_t flags;   /* host byte order in struct; little-endian on wire */
 } t3_header_t;
 
+/* command_type named constants (spec/wire-format.md §3 registry + Epic 1a amendment W-003).
+ * Sentinels 0x00 and 0xFF are MALFORMED on receipt; MUST NOT be emitted.
+ * All values not listed below are reserved — MALFORMED at v0.1.1.
+ */
+#define T3_CMD_MTPROTO_PASSTHROUGH 0x01u  /* canonical production command (FR1) */
+#define T3_CMD_HTTP_DECOY_MIMIC    0x02u  /* reserved-not-allocated at v0.1.x (FR3) */
+#define T3_CMD_BENCH               0x04u  /* Epic 1a: experimental, dev-only —
+                                           * server handler MUST be gated by build flag + runtime config;
+                                           * SHALL NOT appear in production traffic */
+
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__cplusplus)
 _Static_assert(sizeof(t3_header_t) == 4,
-               "t3_header_t must be exactly 4 bytes (no padding) — wire shape is frozen at v0.1.0");
+               "t3_header_t must be exactly 4 bytes (no padding) — wire shape frozen since v0.1.0");
 #endif
 
 /* --------------------------------------------------------------------

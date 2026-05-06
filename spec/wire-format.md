@@ -9,6 +9,9 @@ amendment_log:
   - id: W-002
     date: 2026-04-27
     summary: Round-8 close-out — D2 flat MALFORMED, D3 (cmd,version) dispatch table, D4 subprotocol MUST-NOT-echo, D6 HTTP/1.1 hard-pin, GET-target structured (host,path) rule, EOF-during-fragmentation contract, idle-session accept
+  - id: W-003
+    date: 2026-05-06
+    summary: Epic 1a — allocated command_type=0x04 (T3_CMD_BENCH); split 0x03–0xFE reserved row; added §3.1 BENCH command doc; lib-v0.1.1 ABI patch bump
 ---
 
 > **Normative.** This document defines required behaviour for conforming
@@ -180,17 +183,19 @@ offset  size  field         encoding
 
 Total 4 bytes. No magic prefix, no length field, no checksum.
 
-**Command-type registry (v0.1.0).** Each row gives a sender duty (a
-producer MUST NOT emit this byte) and a receiver duty (a v0.1.0 parser
+**Command-type registry (v0.1.1).** Each row gives a sender duty (a
+producer MUST NOT emit this byte) and a receiver duty (a v0.1.1 parser
 MUST react this way on receipt). The two duties are stated separately
 so future versions can promote a reserved slot without renumbering:
 
-| Value       | Name                  | Sender duty (v0.1.0)                       | Receiver duty (v0.1.0)                                                          |
+| Value       | Name                  | Sender duty (v0.1.1)                       | Receiver duty (v0.1.1)                                                          |
 |-------------|-----------------------|--------------------------------------------|----------------------------------------------------------------------------------|
 | `0x00`      | reserved              | MUST NOT emit                              | `MALFORMED`. Reserved as a sentinel for "no command type set"; symmetric with `0xFF`. |
-| `0x01`      | `MTPROTO_PASSTHROUGH` | MUST emit for every v0.1.0 conn (FR1)      | Process the connection at v0.1.0 semantics (single normative value at v0.1.0).  |
-| `0x02`      | `HTTP_DECOY_MIMIC`    | MUST NOT emit at v0.1.0                    | `MALFORMED` (reserved-not-allocated, FR3).                                       |
-| `0x03–0xFE` | reserved              | MUST NOT emit at v0.1.0                    | `MALFORMED` (reserved for future allocation, FR3).                              |
+| `0x01`      | `MTPROTO_PASSTHROUGH` | MUST emit for every production conn (FR1)  | Process the connection at v0.1.x semantics (single production value).           |
+| `0x02`      | `HTTP_DECOY_MIMIC`    | MUST NOT emit at v0.1.x                    | `MALFORMED` (reserved-not-allocated, FR3).                                       |
+| `0x03`      | reserved              | MUST NOT emit at v0.1.x                    | `MALFORMED` (reserved for future allocation, FR3).                              |
+| `0x04`      | `T3_CMD_BENCH`        | MUST NOT emit in production traffic        | Parse succeeds (`T3_OK`) at v0.1.1; server MUST gate dispatch by build flag + runtime flag. See §3.1. |
+| `0x05–0xFE` | reserved              | MUST NOT emit at v0.1.x                    | `MALFORMED` (reserved for future allocation, FR3).                              |
 | `0xFF`      | reserved              | MUST NOT emit                              | `MALFORMED`. Reserved as the upper boundary of the command-type space, symmetric with `0x00` (cf. `secret-format.md` §1, where `0xFF` marks the *secret* version sentinel — distinct field, distinct namespace). |
 
 **Version field.** At v0.1.0 the `version` byte is `0x01`. A header
@@ -198,7 +203,7 @@ carrying `version > 0x01` triggers §6 Version Negotiation. A header
 carrying `version == 0x00` is `MALFORMED`.
 
 **Flags field.** `flags` is a 16-bit value transmitted in little-endian
-byte order (low byte first). At v0.1.0 every bit MUST be zero; a
+byte order (low byte first). At v0.1.x every bit MUST be zero; a
 non-zero `flags` value is `MALFORMED`. Future versions MAY allocate
 flag bits without bumping the transport ID (FR2): the `version` field
 governs structural / parser-dispatch changes; `flags` governs
@@ -221,11 +226,12 @@ fields are simultaneously suspect:
 
 | `command_type`     | `version`            | Returned error class    | Rationale                                                                  |
 |--------------------|----------------------|-------------------------|----------------------------------------------------------------------------|
-| `0x01` (known)     | `> 0x01` (unknown)   | `UNSUPPORTED_VERSION`   | Known command at unknown version — version negotiation per §6.            |
-| `0x02–0xFE` (unallocated at v0.1.0) | `0x01` (known)       | `MALFORMED`             | Unknown command at known version — reserved slot, no future semantics.    |
-| `0x02–0xFE` (unallocated at v0.1.0) | `> 0x01` (unknown)   | `UNSUPPORTED_VERSION`   | Future-recognised: unknown command at unknown version is forward-compat — defer to version negotiation. |
+| `0x01, 0x04` (known at v0.1.1) | `> 0x01` (unknown) | `UNSUPPORTED_VERSION`   | Known command at unknown version — version negotiation per §6.            |
+| `0x02, 0x03, 0x05–0xFE` (unallocated at v0.1.1) | `0x01` (known) | `MALFORMED` | Unknown command at known version — reserved slot, no future semantics.    |
+| `0x02, 0x03, 0x05–0xFE` (unallocated at v0.1.1) | `> 0x01` (unknown) | `UNSUPPORTED_VERSION` | Future-recognised: unknown command at unknown version is forward-compat — defer to version negotiation. |
+| `0x02, 0x03, 0x05–0xFE` (unallocated at v0.1.1) | `0x00` (sentinel) | `MALFORMED` | Sentinel version fires before cmd classification — MALFORMED regardless.  |
 | `0x00` / `0xFF` (sentinel) | (any)        | `MALFORMED`             | Sentinel slots are MALFORMED regardless of version.                        |
-| `0x01` (known)     | `0x00` (sentinel)    | `MALFORMED`             | Sentinel version slot is MALFORMED regardless of command type.            |
+| `0x01, 0x04` (known at v0.1.1) | `0x00` (sentinel) | `MALFORMED`       | Sentinel version slot is MALFORMED regardless of command type.            |
 
 **Concrete vectors.** The following hex sequences illustrate each
 disposition; matching machine-verifiable vectors live in
@@ -237,6 +243,48 @@ disposition; matching machine-verifiable vectors live in
 - Forward version (triggers §6): `01 02 00 00` — a v0.1.0 server returns `UNSUPPORTED_VERSION` for telemetry and silent-closes.
 
 See diagram [`diagrams/session-header.mmd`](diagrams/session-header.mmd).
+
+### 3.1 BENCH command (`0x04`) — experimental, dev-only <a id="W-003"></a>
+
+`command_type=0x04` (`T3_CMD_BENCH`) is allocated by Epic 1a (lib-v0.1.1) as a
+dev-only bench-echo command. It is intentionally NOT a production feature; server
+dispatch MUST be gated by a build-time flag **and** a runtime flag (default OFF in
+production builds). This section is normative for lib-v0.1.1.
+
+**Payload layout.** After the 4-byte Session Header, the first byte of the
+obfuscated payload MUST be a sub-mode octet:
+
+| Sub-mode | Value  | Semantics                                                           |
+|----------|--------|---------------------------------------------------------------------|
+| sink     | `0x01` | Server reads payload and discards; no data is echoed back.          |
+| echo     | `0x02` | Server echoes every received byte back to the client unchanged.     |
+| source   | `0x03` | Server generates and sends a payload of the negotiated size; client reads. |
+
+Sub-modes `0x00` and `0x04–0xFF` are reserved. A server that receives an
+unrecognised sub-mode MUST silent-close per §5.
+
+**Server gate (mandatory).** A server MUST NOT dispatch `T3_CMD_BENCH` unless
+**both** of the following are true:
+1. The build was compiled with the bench-server build flag (`TELEPROTO3_BENCH=1`
+   — defined by Story 1a-2).
+2. The runtime flag `--bench-enable` (or equivalent) is active at startup.
+
+A v0.1.1 server receiving `0x04` while either gate is OFF MUST silent-close per §5
+exactly as if an unknown command type were received — no acknowledgement, no error
+frame.
+
+**Version compatibility.**
+- v0.1.0 clients MUST NOT emit `command_type=0x04`; they have no `T3_CMD_BENCH`
+  constant and the reserved slot was `MALFORMED` at v0.1.0.
+- v0.1.1 clients MAY emit `0x04` only against a server known (out-of-band) to be
+  compiled with the bench gate.
+- A v0.1.0 server receiving `0x04 0x01 0x00 0x00` returns `MALFORMED` (former
+  reserved-slot rule) — fully backward-compatible with the v0.1.1 library sending
+  such a header only in bench context.
+
+**Non-production invariant.** `T3_CMD_BENCH` `SHALL NOT appear in production
+traffic` (quoting the `t3.h` constant comment). Any network capture of `0x04` on
+a production endpoint is evidence of misconfiguration.
 
 ## 4. Obfuscated stream (AES-256-CTR setup) <a id="W-001"></a>
 
@@ -478,6 +526,6 @@ index, not a redefinition.
 |-------|---------------------------------------------------------------------------------------|--------------------------------------------------------------------------------|
 | FR1   | MTProto traffic carried over WebSocket inside TLS.                                    | §1 (TLS + WS upgrade), §2 (Binary opcode + fragmentation), §3 cmd `0x01 MTPROTO_PASSTHROUGH`, §4 (obfuscated-2 stream layered on the WS payload). |
 | FR2   | Extensibility via flags without breaking unchanged command types.                     | §3 `flags` field (u16 LE), §6 (version vs flags axis separation).             |
-| FR3   | Reserved command-type slots for forward growth.                                       | §3 registry table — `0x02 HTTP_DECOY_MIMIC` reserved-not-allocated; `0x03–0xFE` reserved for future allocation. |
+| FR3   | Reserved command-type slots for forward growth.                                       | §3 registry table — `0x02 HTTP_DECOY_MIMIC` reserved-not-allocated; `0x04 T3_CMD_BENCH` (experimental, W-003); `0x03, 0x05–0xFE` reserved for future allocation. |
 | FR4   | In-band version negotiation; silent close on mismatch.                                | §3 `version` field, §5 silent close, §6 negotiation rules.                    |
 | FR40  | Canonical wire-protocol spec exists and covers Session Header + command-type namespace + anti-probe semantics. | This entire document; specifically §3 (header + namespace), §5 (silent close + class catalogue), §6 (version), with anti-probe timing delegated to `anti-probe.md` (story 1.3). |

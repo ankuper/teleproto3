@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "note": "Conformance vectors for libteleproto3 v0.1.0. XFAIL-PENDING-1.7 status lifted.",
+  "note": "Conformance vectors for libteleproto3 v0.1.1. XFAIL-PENDING-1.7 status lifted. Epic 1a (W-003): T3_CMD_BENCH=0x04 added.",
   "session-header": [
     {"id":"well-formed-v1","args":["01010000"],"expect":{"ok":true,"result":{"command_type":1,"version":1,"flags":0}}},
     {"id":"reject-cmd-00","args":["00010000"],"expect":{"ok":false,"error":"MALFORMED"}},
@@ -16,8 +16,15 @@
     {"id":"reject-cmdfe-v2","args":["fe020000"],"expect":{"ok":false,"error":"UNSUPPORTED_VERSION"}},
     {"id":"reject-all-zeros","args":["00000000"],"expect":{"ok":false,"error":"MALFORMED"}},
     {"id":"reject-all-ff","args":["ffffffff"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-cmd0-v0","args":["00000000"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-nonzero-flags-both","args":["01010202"],"expect":{"ok":false,"error":"MALFORMED"}}
+    {"id":"reject-cmd0-nonzero-tail","args":["000000ff"],"expect":{"ok":false,"error":"MALFORMED"}},
+    {"id":"reject-nonzero-flags-both","args":["01010202"],"expect":{"ok":false,"error":"MALFORMED"}},
+    {"id":"reject-cmd03-reserved","args":["03010000"],"expect":{"ok":false,"error":"MALFORMED"}},
+    {"id":"reject-cmd2-vff","args":["02ff0000"],"expect":{"ok":false,"error":"UNSUPPORTED_VERSION"}},
+    {"id":"reject-unknown-v0","args":["020000ff"],"expect":{"ok":false,"error":"MALFORMED"}},
+    {"id":"well-formed-bench","args":["04010000"],"expect":{"ok":true,"result":{"command_type":4,"version":1,"flags":0}}},
+    {"id":"bench-v2-unsupported","args":["04020000"],"expect":{"ok":false,"error":"UNSUPPORTED_VERSION"}},
+    {"id":"bench-vff-unsupported","args":["04ff0000"],"expect":{"ok":false,"error":"UNSUPPORTED_VERSION"}},
+    {"id":"bench-flags-nonzero","args":["04010100"],"expect":{"ok":false,"error":"MALFORMED"}}
   ],
   "secret-format": [
     {"id":"sf-well-formed-host","args":["ff000000000000000000000000000000006578616d706c652e636f6d"],"expect":{"ok":true}},

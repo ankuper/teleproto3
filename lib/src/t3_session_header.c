@@ -7,7 +7,7 @@
  *
  * Wire format is LITTLE-ENDIAN regardless of host endianness.
  * Source: spec/wire-format.md §3 + story 1.7 Tasks 2 & 7.
- * Stability: lib-v0.1.0 ABI (frozen by story 1.6).
+ * Stability: lib-v0.1.x ABI (frozen by story 1.6; patch-bumped by 1a-1).
  */
 
 #include "t3.h"
@@ -31,13 +31,16 @@ T3_API t3_result_t t3_header_parse(const uint8_t buf[4], t3_header_t *out) {
     if (cmd == 0x00 || cmd == 0xFF) return T3_ERR_MALFORMED;
     /* Sentinel version 0x00: always MALFORMED. */
     if (version == 0x00) return T3_ERR_MALFORMED;
+    /* Known cmds: 0x01 MTPROTO_PASSTHROUGH, 0x04 BENCH (Epic 1a, lib-v0.1.1). */
+#define T3_KNOWN_CMD(c) ((c) == T3_CMD_MTPROTO_PASSTHROUGH || (c) == T3_CMD_BENCH)
     /* Known cmd, unknown version → UNSUPPORTED_VERSION. */
-    if (cmd == 0x01 && version > 0x01) return T3_ERR_UNSUPPORTED_VERSION;
-    /* Unknown cmd at known v0.1.0 → MALFORMED. */
-    if (cmd != 0x01 && version == 0x01) return T3_ERR_MALFORMED;
+    if (T3_KNOWN_CMD(cmd) && version > 0x01) return T3_ERR_UNSUPPORTED_VERSION;
+    /* Unknown cmd at known version → MALFORMED. */
+    if (!T3_KNOWN_CMD(cmd) && version == 0x01) return T3_ERR_MALFORMED;
     /* Unknown cmd at unknown version → UNSUPPORTED_VERSION (future-compat). */
-    if (cmd != 0x01 && version > 0x01) return T3_ERR_UNSUPPORTED_VERSION;
-    /* Flags: at v0.1.0 every bit MUST be zero. */
+    if (!T3_KNOWN_CMD(cmd) && version > 0x01) return T3_ERR_UNSUPPORTED_VERSION;
+#undef T3_KNOWN_CMD
+    /* Flags: at v0.1.x every bit MUST be zero. */
     if (flags != 0) return T3_ERR_MALFORMED;
 
     out->command_type = cmd;
@@ -73,7 +76,7 @@ T3_API t3_result_t t3_session_negotiate_version(t3_session_t *sess,
  * Fragmentation-tolerant header accumulator (spec/wire-format.md §2)
  * ====================================================================== */
 
-__attribute__((visibility("hidden")))
+T3_HIDDEN
 t3_result_t t3_session_handle_header_byte(t3_session_t *s, uint8_t b) {
     if (!s || s->parse_buf_len >= 4) return T3_ERR_INVALID_ARG;
     s->parse_buf[s->parse_buf_len++] = b;

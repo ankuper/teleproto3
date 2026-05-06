@@ -1,10 +1,32 @@
 cmake_minimum_required(VERSION 3.20)
-project(teleproto3 LANGUAGES C VERSION 0.1.0)
+project(teleproto3 LANGUAGES C VERSION 0.1.1)
 
 # -----------------------------------------------------------------------
 # Build options (set via -D on the cmake command line)
 # -----------------------------------------------------------------------
 option(T3_BUILD_TESTS "Build and register test programs via CTest" ON)
+
+# -----------------------------------------------------------------------
+# macOS universal binary option (Task 4 — Story 1-13)
+# Default OFF: arm64-only is mandatory; x86_64 is best-effort and requires
+# a fat OpenSSL bottle. Set ON to build a fat archive.
+# -----------------------------------------------------------------------
+if(APPLE)
+    option(T3_MACOS_X86_64 "Include x86_64 slice in macOS build" OFF)
+    if(T3_MACOS_X86_64)
+        if(NOT CMAKE_OSX_ARCHITECTURES)
+            set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING
+                "Build fat library for arm64 + x86_64")
+        endif()
+        message(STATUS "teleproto3: macOS universal binary (${CMAKE_OSX_ARCHITECTURES})")
+    else()
+        if(NOT CMAKE_OSX_ARCHITECTURES)
+            set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING
+                "Build arm64-only (mandatory; x86_64 is opt-in)")
+        endif()
+        message(STATUS "teleproto3: macOS arm64-only (${CMAKE_OSX_ARCHITECTURES})")
+    endif()
+endif()
 
 set(T3_SANITIZE "" CACHE STRING
     "Comma-separated sanitizers to enable (e.g. 'address,undefined').
@@ -19,16 +41,15 @@ option(T3_HARDENING
 # -----------------------------------------------------------------------
 # Per-platform CSPRNG backend selection
 # -----------------------------------------------------------------------
-# Default is 'none' until platform stories 1-12/1-13/1-14 land — see A-009.
-# 'none' returns T3_ERR_RNG unconditionally so the library compiles cleanly
-# on any host without entropy. Set T3_CSPRNG_BACKEND=AUTO once 1-12/1-13/1-14
-# close to enable host-detection.
-set(T3_CSPRNG_BACKEND "none" CACHE STRING
+# Default is 'AUTO' — stories 1-12 (Linux) and 1-13 (macOS) are done.
+# AUTO detects the host platform and selects the matching CSPRNG backend.
+# Windows backend (1-14) is ready-for-dev; until it lands, Windows builds
+# must pass -DT3_CSPRNG_BACKEND=none explicitly if needed for CI.
+set(T3_CSPRNG_BACKEND "AUTO" CACHE STRING
     "CSPRNG backend: linux | macos | windows | none | AUTO (host-detect).
-     'none' (default) returns T3_ERR_RNG unconditionally — safe for CI and
-     for local builds before the platform backend stories close. Platform
-     stories 1-12/1-13/1-14 replace the real backends; flip default to AUTO
-     once 1-14 closes.")
+     AUTO selects the platform backend based on CMAKE_SYSTEM_NAME.
+     'none' returns T3_ERR_RNG unconditionally — use only for CI/portability
+     gate builds where entropy is intentionally unavailable.")
 set_property(CACHE T3_CSPRNG_BACKEND PROPERTY STRINGS linux macos windows none AUTO)
 
 if(T3_CSPRNG_BACKEND STREQUAL "AUTO")
@@ -54,7 +75,14 @@ message(STATUS "teleproto3: CSPRNG backend = ${T3_CSPRNG_BACKEND_RESOLVED}")
 # (t3_keyderiv.c and t3_obfuscated2.c are stubs in lib v0.1.0;
 # find_package is wired now so platform stories do not need to touch CMake)
 # -----------------------------------------------------------------------
-find_package(OpenSSL 3.0 REQUIRED)
+find_package(OpenSSL 3.0 QUIET)
+if(NOT OpenSSL_FOUND)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        message(FATAL_ERROR "teleproto3: OpenSSL 3.0 not found. macOS users should run 'brew install openssl@3' and pass -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3) to CMake.")
+    else()
+        message(FATAL_ERROR "teleproto3: OpenSSL 3.0 not found. Please install libssl-dev or equivalent.")
+    endif()
+endif()
 
 # -----------------------------------------------------------------------
 # Static library target
@@ -89,6 +117,14 @@ target_include_directories(teleproto3
 # Link libraries
 # -----------------------------------------------------------------------
 target_link_libraries(teleproto3 PUBLIC OpenSSL::Crypto)
+
+# Task 3 (Story 1-13): Security.framework for SecRandomCopyBytes on macOS.
+# Without this flag the linker will fail with:
+#   Undefined symbols for architecture arm64: "_SecRandomCopyBytes"
+# The flag is gated on APPLE so Linux and Windows builds are unaffected.
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND T3_CSPRNG_BACKEND_RESOLVED STREQUAL "macos")
+    target_link_libraries(teleproto3 PUBLIC "-framework Security")
+endif()
 
 # -----------------------------------------------------------------------
 # Compiler flags
@@ -144,7 +180,7 @@ endif()
 if(T3_BUILD_TESTS)
     enable_testing()
 
-    # CSPRNG statistical smoke test (Linux-only — guards at source level too)
+    # CSPRNG statistical smoke test — Linux only
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
        NOT T3_CSPRNG_BACKEND_RESOLVED STREQUAL "none")
         add_executable(test_csprng_linux
@@ -157,6 +193,20 @@ if(T3_BUILD_TESTS)
         target_link_libraries(test_csprng_linux PRIVATE teleproto3)
         target_compile_features(test_csprng_linux PRIVATE c_std_11)
         add_test(NAME csprng_linux COMMAND test_csprng_linux)
+    endif()
+
+    # CSPRNG statistical smoke test — macOS (Task 2, Story 1-13)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND T3_CSPRNG_BACKEND_RESOLVED STREQUAL "macos")
+        add_executable(test_csprng_macos
+            tests/csprng/test_csprng_macos.c
+        )
+        target_include_directories(test_csprng_macos PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
+        )
+        target_link_libraries(test_csprng_macos PRIVATE teleproto3)
+        target_compile_features(test_csprng_macos PRIVATE c_std_11)
+        add_test(NAME csprng_macos COMMAND test_csprng_macos)
     endif()
 
     # KDF vector reference runner (cross-platform; uses OpenSSL directly)
@@ -175,13 +225,19 @@ if(T3_BUILD_TESTS)
     endif()
 
     # CI diff-check: regenerate hashes and compare against committed reference.
-    # The test is registered only when the reference file exists.
+    # Registered on Linux AND macOS (Story 1-13 AC #5: macOS must match linux-reference.sha256).
     set(_ref_hash "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/linux-reference.sha256")
     set(_kat_file "${CMAKE_CURRENT_SOURCE_DIR}/../conformance/vectors/kdf-kat.txt")
     if(EXISTS "${_ref_hash}" AND EXISTS "${_kat_file}" AND
-       CMAKE_SYSTEM_NAME STREQUAL "Linux")
+       (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin"))
+        # Name the test by platform so both appear in ctest output.
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            set(_kdf_test_name kdf_vectors_linux)
+        else()
+            set(_kdf_test_name kdf_vectors_macos)
+        endif()
         add_test(
-            NAME kdf_vectors_linux
+            NAME ${_kdf_test_name}
             COMMAND ${CMAKE_COMMAND}
                 -DRUNNER=$<TARGET_FILE:run_kdf_vectors>
                 -DKAT_FILE=${_kat_file}
