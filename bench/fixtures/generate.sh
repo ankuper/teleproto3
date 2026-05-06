@@ -102,6 +102,7 @@ import json
 import os
 
 data = {
+    "schema_version": 1,
     "generated_at": os.environ["TS"],
     "fixtures": [
         {"path": "fixture-1mb.bin",  "size_bytes": 1048576,  "sha256": os.environ["HASH_1MB"]},
