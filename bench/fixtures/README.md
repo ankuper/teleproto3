@@ -10,8 +10,10 @@
 
 ## Usage
 
+From the `teleproto3` repo root:
+
 ```bash
-cd teleproto3/bench/fixtures
+cd bench/fixtures
 bash generate.sh
 ```
 

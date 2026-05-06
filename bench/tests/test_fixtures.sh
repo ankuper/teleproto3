@@ -42,7 +42,11 @@ if [ ! -f "$GENERATE_SH" ]; then
     [ "$FAIL" -eq 0 ] && exit 0 || exit 1
 fi
 
-(cd "$FIXTURES_DIR" && bash generate.sh 2>&1) || true
+GEN_EXIT=0
+(cd "$FIXTURES_DIR" && bash generate.sh 2>&1) || GEN_EXIT=$?
+if [ "$GEN_EXIT" -ne 0 ]; then
+    printf 'WARN: generate.sh exited %d (downstream test failures may have masked root cause)\n' "$GEN_EXIT" >&2
+fi
 
 all_exist=true
 for f in fixture-1mb.bin fixture-10mb.bin fixture-50mb.bin; do
