@@ -209,13 +209,18 @@ def test_endpoint_from_bench_env():
     """AC#6: BENCH_* env vars take precedence over WS_*."""
     from teleproto3.bench.bench_client import resolve_endpoint
 
+    # Full Type3 secret: 0xFF + 16-byte key + domain bytes
+    _bench_key = "aabbccdd00112233aabbccdd00112233"
+    _bench_domain_hex = "62656e63682e6578616d706c652e636f6d"  # "bench.example.com"
+    _ws_key = "11223344556677881122334455667788"
+    _ws_domain_hex = "70726f642e6578616d706c652e636f6d"  # "prod.example.com"
     env = {
         "BENCH_DOMAIN": "bench.example.com",
         "BENCH_PATH": "/ws/bench",
-        "BENCH_SECRET": "aabbccdd00112233aabbccdd00112233",
+        "BENCH_SECRET": "ff" + _bench_key + _bench_domain_hex,
         "WS_DOMAIN": "prod.example.com",
         "WS_PATH": "/ws/prod",
-        "WS_SECRET": "11223344556677881122334455667788",
+        "WS_SECRET": "ff" + _ws_key + _ws_domain_hex,
     }
 
     with patch.dict("os.environ", env, clear=False):
@@ -223,17 +228,19 @@ def test_endpoint_from_bench_env():
 
     assert endpoint["server"] == "bench.example.com"
     assert endpoint["path"] == "/ws/bench"
-    assert endpoint["secret"] == bytes.fromhex("aabbccdd00112233aabbccdd00112233")
+    assert endpoint["secret"] == bytes.fromhex(_bench_key)
 
 
 def test_endpoint_fallback_to_ws_env():
     """AC#6: WS_* env vars are used as fallback."""
     from teleproto3.bench.bench_client import resolve_endpoint
 
+    _ws_key = "11223344556677881122334455667788"
+    _ws_domain_hex = "70726f642e6578616d706c652e636f6d"  # "prod.example.com"
     env_fallback = {
         "WS_DOMAIN": "prod.example.com",
         "WS_PATH": "/ws/prod",
-        "WS_SECRET": "11223344556677881122334455667788",
+        "WS_SECRET": "ff" + _ws_key + _ws_domain_hex,
     }
 
     with patch.dict("os.environ", env_fallback, clear=True):

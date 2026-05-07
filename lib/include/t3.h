@@ -152,7 +152,10 @@ typedef struct {
  * All values not listed below are reserved — MALFORMED at v0.1.1.
  */
 #define T3_CMD_MTPROTO_PASSTHROUGH 0x01u  /* canonical production command (FR1) */
-#define T3_CMD_HTTP_DECOY_MIMIC    0x02u  /* reserved-not-allocated at v0.1.x (FR3) */
+#define T3_CMD_HTTP_DECOY_MIMIC    0x02u  /* reserved-not-allocated at v0.1.x (FR3);
+                                           * sender MUST NOT emit; receiver rejects
+                                           * (MALFORMED at version=0x01;
+                                           *  UNSUPPORTED_VERSION at version>0x01) */
 #define T3_CMD_BENCH               0x04u  /* Epic 1a: experimental, dev-only —
                                            * server handler MUST be gated by build flag + runtime config;
                                            * SHALL NOT appear in production traffic */

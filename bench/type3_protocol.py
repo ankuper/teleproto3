@@ -46,7 +46,7 @@ def parse_secret_hex(hex_string: str) -> dict:
         path = domain[slash_idx:]
     else:
         host = domain
-        path = "/"
+        path = ""
     return {"marker": marker, "key": key, "domain": domain, "host": host, "path": path}
 
 
@@ -231,26 +231,70 @@ def _build_ws_frame(payload: bytes, opcode: int = 0x02, mask: bool = True) -> by
     return bytes(frame)
 
 
-async def _read_ws_frame(reader: asyncio.StreamReader) -> bytes:
-    """Read and unmask a single WebSocket frame. Returns payload bytes."""
-    hdr = await reader.readexactly(2)
-    opcode = hdr[0] & 0x0F
-    is_masked = bool(hdr[1] & 0x80)
-    length = hdr[1] & 0x7F
+_MAX_CONSECUTIVE_EMPTY_FRAMES = 8
 
-    if length == 126:
-        length = struct.unpack(">H", await reader.readexactly(2))[0]
-    elif length == 127:
-        length = struct.unpack(">Q", await reader.readexactly(8))[0]
 
-    if is_masked:
-        mask_key = await reader.readexactly(4)
-        data = bytearray(await reader.readexactly(length))
-        for i in range(len(data)):
-            data[i] ^= mask_key[i % 4]
-        return bytes(data)
-    else:
-        return await reader.readexactly(length)
+async def _read_ws_frame(
+    reader: asyncio.StreamReader,
+    writer: Optional[asyncio.StreamWriter] = None,
+) -> bytes:
+    """Read and unmask WebSocket frames, skipping control and non-binary frames.
+
+    If `writer` is provided, responds to PING (opcode 0x09) with PONG (opcode 0x0A)
+    per RFC 6455 §5.5.2, echoing the payload. PONG and CLOSE frames are discarded.
+
+    Raises ConnectionError if more than _MAX_CONSECUTIVE_EMPTY_FRAMES (8) consecutive
+    zero-length data frames arrive — guards against unbounded loops on misbehaving
+    servers (P8).
+    """
+    consecutive_empty = 0
+    while True:
+        hdr = await reader.readexactly(2)
+        opcode = hdr[0] & 0x0F
+        is_masked = bool(hdr[1] & 0x80)
+        length = hdr[1] & 0x7F
+
+        if length == 126:
+            length = struct.unpack(">H", await reader.readexactly(2))[0]
+        elif length == 127:
+            length = struct.unpack(">Q", await reader.readexactly(8))[0]
+
+        if is_masked:
+            mask_key = await reader.readexactly(4)
+            data = bytearray(await reader.readexactly(length))
+            for i in range(len(data)):
+                data[i] ^= mask_key[i % 4]
+            payload = bytes(data)
+        else:
+            payload = await reader.readexactly(length)
+
+        if opcode == 0x09:
+            # PING: RFC 6455 §5.5.2 mandates an unsolicited PONG echoing the payload.
+            if writer is not None:
+                pong_frame = _build_ws_frame(payload, opcode=0x0A, mask=True)
+                writer.write(pong_frame)
+                await writer.drain()
+            continue
+        if opcode & 0x08:
+            # PONG (0x0A) or CLOSE (0x08): discard without advancing AES-CTR.
+            continue
+        if opcode not in (0x00, 0x02):
+            # Text frame or reserved opcode: discard.
+            continue
+
+        # P8: bound consecutive zero-length data frames so a misbehaving server
+        # cannot drive an unbounded loop here.
+        if length == 0:
+            consecutive_empty += 1
+            if consecutive_empty > _MAX_CONSECUTIVE_EMPTY_FRAMES:
+                raise ConnectionError(
+                    f"too many consecutive zero-length data frames "
+                    f"(>{_MAX_CONSECUTIVE_EMPTY_FRAMES}); server protocol violation"
+                )
+            continue
+        consecutive_empty = 0
+
+        return payload
 
 
 class Type3Connection:
@@ -281,11 +325,13 @@ class Type3Connection:
         await self._writer.drain()
 
     async def recv(self, n: int) -> bytes:
-        """Receive and decrypt exactly n bytes from the WS stream."""
+        """Receive and decrypt exactly n bytes from the WS stream.
+
+        Passes self._writer to _read_ws_frame so PINGs get a PONG response per
+        RFC 6455 §5.5.2 (P7).
+        """
         while len(self._read_buf) < n:
-            frame_data = await _read_ws_frame(self._reader)
-            if not frame_data:
-                break
+            frame_data = await _read_ws_frame(self._reader, self._writer)
             decrypted = self._session.decrypt(frame_data)
             self._read_buf.extend(decrypted)
         result = bytes(self._read_buf[:n])
@@ -294,7 +340,7 @@ class Type3Connection:
 
     async def recv_available(self) -> bytes:
         """Receive whatever is available in the next WS frame."""
-        frame_data = await _read_ws_frame(self._reader)
+        frame_data = await _read_ws_frame(self._reader, self._writer)
         if not frame_data:
             return b""
         return self._session.decrypt(frame_data)

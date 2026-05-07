@@ -57,14 +57,23 @@ static int jbool(const char *j, const char *k){
 }
 
 static int test_byteorder(void){
+    /* Round-trip identity for the only valid v0.1.x header shape. */
     uint8_t wire[4]={0x01,0x01,0x00,0x00};
     t3_header_t hdr;
     if(t3_header_parse(wire,&hdr)!=T3_OK||hdr.flags!=0){fprintf(stderr,"[bo] FAIL parse\n");return 1;}
     uint8_t out[4]={0};
     if(t3_header_serialise(&hdr,out)!=T3_OK||memcmp(wire,out,4)!=0){fprintf(stderr,"[bo] FAIL rt\n");return 1;}
+    /* Strict-validation contract (R3-D1 / R3-P1): serialise rejects flags!=0
+     * (reserved-zero at v0.1.x) AND leaves the output buffer untouched on
+     * rejection. Pre-fill wire2 with a sentinel pattern to detect any partial
+     * write. Pre-1a-1 R2-D2 this test read uninitialised stack memory. */
     t3_header_t hdr2={0x01,0x01,0x0102};
-    uint8_t wire2[4]; t3_header_serialise(&hdr2,wire2);
-    if(wire2[2]!=0x02||wire2[3]!=0x01){fprintf(stderr,"[bo] FAIL LE\n");return 1;}
+    uint8_t wire2[4]={0xAA,0xAA,0xAA,0xAA};
+    t3_result_t rc = t3_header_serialise(&hdr2,wire2);
+    if(rc!=T3_ERR_MALFORMED){fprintf(stderr,"[bo] FAIL serialise should reject flags!=0 (rc=%d)\n",rc);return 1;}
+    if(wire2[0]!=0xAA||wire2[1]!=0xAA||wire2[2]!=0xAA||wire2[3]!=0xAA){
+        fprintf(stderr,"[bo] FAIL serialise wrote buf on reject\n");return 1;
+    }
     printf("[byteorder] PASS\n"); return 0;
 }
 

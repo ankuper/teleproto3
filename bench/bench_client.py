@@ -49,10 +49,12 @@ CSV_COLUMNS = [
     "mode",
     "size_bytes",
     "run_index",
-    "ttfb_ms",
     "duration_ms",
     "throughput_mbps",
+    "upload_mbps",
+    "download_mbps",
     "sha256_match",
+    "fixture_sha256",
     "error_class",
 ]
 
@@ -80,10 +82,11 @@ def resolve_endpoint(
         secret_hex = os.environ.get(secret_env, "")
         if not secret_hex:
             raise ValueError(f"env var {secret_env} not set")
+        parsed = parse_secret_hex(secret_hex)
         return {
             "server": server,
             "path": path,
-            "secret": bytes.fromhex(secret_hex),
+            "secret": parsed["key"],
         }
 
     bench_domain = os.environ.get("BENCH_DOMAIN", "")
@@ -91,10 +94,11 @@ def resolve_endpoint(
     bench_secret = os.environ.get("BENCH_SECRET", "")
 
     if bench_domain and bench_secret:
+        parsed = parse_secret_hex(bench_secret)
         return {
             "server": server or bench_domain,
-            "path": path or bench_path or "/",
-            "secret": bytes.fromhex(bench_secret),
+            "path": path or bench_path or parsed["path"] or "/",
+            "secret": parsed["key"],
         }
 
     ws_domain = os.environ.get("WS_DOMAIN", "")
@@ -102,10 +106,11 @@ def resolve_endpoint(
     ws_secret = os.environ.get("WS_SECRET", "")
 
     if ws_domain and ws_secret:
+        parsed = parse_secret_hex(ws_secret)
         return {
             "server": server or ws_domain,
-            "path": path or ws_path or "/",
-            "secret": bytes.fromhex(ws_secret),
+            "path": path or ws_path or parsed["path"] or "/",
+            "secret": parsed["key"],
         }
 
     raise ValueError(
@@ -120,11 +125,13 @@ class RunResult:
     mode: str
     size_bytes: int
     run_index: int
-    ttfb_ms: float
     duration_ms: float
     throughput_mbps: float
     sha256_match: str
+    fixture_sha256: str
     error_class: str
+    upload_mbps: Optional[float] = None  # echo mode only
+    download_mbps: Optional[float] = None  # echo mode only
 
     def as_csv_row(self) -> dict:
         return {
@@ -132,10 +139,16 @@ class RunResult:
             "mode": self.mode,
             "size_bytes": str(self.size_bytes),
             "run_index": str(self.run_index),
-            "ttfb_ms": f"{self.ttfb_ms:.2f}",
             "duration_ms": f"{self.duration_ms:.2f}",
             "throughput_mbps": f"{self.throughput_mbps:.2f}",
+            "upload_mbps": (
+                f"{self.upload_mbps:.2f}" if self.upload_mbps is not None else "na"
+            ),
+            "download_mbps": (
+                f"{self.download_mbps:.2f}" if self.download_mbps is not None else "na"
+            ),
             "sha256_match": self.sha256_match,
+            "fixture_sha256": self.fixture_sha256,
             "error_class": self.error_class,
         }
 
@@ -147,7 +160,8 @@ class CsvEmitter:
         if isinstance(output, str):
             path = Path(output)
             path.parent.mkdir(parents=True, exist_ok=True)
-            self._needs_header = not path.exists() or path.stat().st_size == 0
+            # Decide before open: tell()-after-"a" is platform-dependent.
+            self._needs_header = not (path.exists() and path.stat().st_size > 0)
             self._file = open(path, "a", newline="")
             self._owns_file = True
         else:
@@ -187,7 +201,6 @@ async def mode_sink(
     Returns dict with throughput metrics.
     """
     t_start = time.monotonic_ns()
-    t_first_byte = None
     total_sent = 0
 
     offset = 0
@@ -195,22 +208,16 @@ async def mode_sink(
         chunk = payload[offset : offset + chunk_size]
         writer.write(chunk)
         await writer.drain()
-        if t_first_byte is None:
-            t_first_byte = time.monotonic_ns()
         total_sent += len(chunk)
         offset += len(chunk)
 
     t_end = time.monotonic_ns()
-    if t_first_byte is None:
-        t_first_byte = t_start
 
     duration_ms = (t_end - t_start) / 1_000_000
-    ttfb_ms = (t_first_byte - t_start) / 1_000_000
     throughput_mbps = (total_sent * 8) / (duration_ms * 1000) if duration_ms > 0 else 0
 
     return {
         "bytes_sent": total_sent,
-        "ttfb_ms": ttfb_ms,
         "duration_ms": duration_ms,
         "throughput_mbps": throughput_mbps,
         "sha256_match": "na",
@@ -238,21 +245,29 @@ async def mode_echo(
     """
     fixture_sha256 = hashlib.sha256(payload).hexdigest()
     t_start = time.monotonic_ns()
-    t_first_byte = None
     total_sent = 0
     received_chunks = []
+
+    # Per-direction timing accumulators
+    send_ns = 0
+    recv_ns = 0
+    t_send_end = t_start
+    t_recv_start = None
 
     if ack_mode == "sequential":
         offset = 0
         while offset < len(payload):
             chunk = payload[offset : offset + chunk_size]
+            t_cs = time.monotonic_ns()
             writer.write(chunk)
             await writer.drain()
+            t_cr = time.monotonic_ns()
+            send_ns += t_cr - t_cs
             total_sent += len(chunk)
 
             echo_data = await reader.readexactly(len(chunk))
-            if t_first_byte is None:
-                t_first_byte = time.monotonic_ns()
+            t_ce = time.monotonic_ns()
+            recv_ns += t_ce - t_cr
             received_chunks.append(echo_data)
             offset += len(chunk)
     else:
@@ -265,28 +280,39 @@ async def mode_echo(
             total_sent += len(chunk)
             offset += len(chunk)
 
+        t_send_end = time.monotonic_ns()
+        t_recv_start = t_send_end
         bytes_remaining = len(payload)
         while bytes_remaining > 0:
             to_read = min(bytes_remaining, chunk_size)
             echo_data = await reader.readexactly(to_read)
-            if t_first_byte is None:
-                t_first_byte = time.monotonic_ns()
             received_chunks.append(echo_data)
             bytes_remaining -= len(echo_data)
 
     t_end = time.monotonic_ns()
-    if t_first_byte is None:
-        t_first_byte = t_start
 
     received = b"".join(received_chunks)
     received_sha256 = hashlib.sha256(received).hexdigest()
     sha256_match = "true" if received_sha256 == fixture_sha256 else "false"
 
     duration_ms = (t_end - t_start) / 1_000_000
-    ttfb_ms = (t_first_byte - t_start) / 1_000_000
     total_bytes_on_wire = 2 * len(payload)
     throughput_mbps = (
         (total_bytes_on_wire * 8) / (duration_ms * 1000) if duration_ms > 0 else 0
+    )
+
+    if ack_mode == "sequential":
+        upload_time_ms = send_ns / 1_000_000
+        download_time_ms = recv_ns / 1_000_000
+    else:
+        upload_time_ms = (t_send_end - t_start) / 1_000_000
+        download_time_ms = (t_end - t_recv_start) / 1_000_000 if t_recv_start else 0
+
+    upload_mbps = (
+        (len(payload) * 8) / (upload_time_ms * 1000) if upload_time_ms > 0 else 0.0
+    )
+    download_mbps = (
+        (len(payload) * 8) / (download_time_ms * 1000) if download_time_ms > 0 else 0.0
     )
 
     error_class = "ok" if sha256_match == "true" else "corruption"
@@ -294,9 +320,10 @@ async def mode_echo(
     return {
         "bytes_sent": total_sent,
         "bytes_received": len(received),
-        "ttfb_ms": ttfb_ms,
         "duration_ms": duration_ms,
         "throughput_mbps": throughput_mbps,
+        "upload_mbps": upload_mbps,
+        "download_mbps": download_mbps,
         "sha256_match": sha256_match,
         "error_class": error_class,
     }
@@ -306,6 +333,7 @@ async def mode_source(
     reader: object,
     writer: object,
     size: int,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> dict:
     """Source mode: send 4-byte LE length N, read N bytes from server.
 
@@ -313,28 +341,33 @@ async def mode_source(
         reader: object with async .readexactly(n) method
         writer: object with .write(data) and async .drain() methods
         size: number of bytes to request from server
+        chunk_size: max bytes per read call
 
     Returns dict with throughput metrics.
     """
     t_start = time.monotonic_ns()
-    t_first_byte = None
 
     length_prefix = struct.pack("<I", size)
     writer.write(length_prefix)
     await writer.drain()
 
-    received = await reader.readexactly(size)
-    t_first_byte = time.monotonic_ns()
+    total_received = 0
+    bytes_remaining = size
+    while bytes_remaining > 0:
+        to_read = min(bytes_remaining, chunk_size)
+        chunk = await reader.readexactly(to_read)
+        total_received += len(chunk)
+        bytes_remaining -= len(chunk)
 
     t_end = time.monotonic_ns()
 
     duration_ms = (t_end - t_start) / 1_000_000
-    ttfb_ms = (t_first_byte - t_start) / 1_000_000
-    throughput_mbps = (size * 8) / (duration_ms * 1000) if duration_ms > 0 else 0
+    throughput_mbps = (
+        (total_received * 8) / (duration_ms * 1000) if duration_ms > 0 else 0
+    )
 
     return {
-        "bytes_received": len(received),
-        "ttfb_ms": ttfb_ms,
+        "bytes_received": total_received,
         "duration_ms": duration_ms,
         "throughput_mbps": throughput_mbps,
         "sha256_match": "na",
@@ -376,22 +409,22 @@ async def run_bench(
             mode=mode,
             size_bytes=size_bytes,
             run_index=run_index,
-            ttfb_ms=0.0,
             duration_ms=0.0,
             throughput_mbps=0.0,
             sha256_match="false",
+            fixture_sha256="na",
             error_class="timeout",
         )
-    except Exception as e:
+    except Exception:
         return RunResult(
             ts_iso=ts_iso,
             mode=mode,
             size_bytes=size_bytes,
             run_index=run_index,
-            ttfb_ms=0.0,
             duration_ms=0.0,
             throughput_mbps=0.0,
             sha256_match="false",
+            fixture_sha256="na",
             error_class="handshake_fail",
         )
 
@@ -423,7 +456,12 @@ async def run_bench(
             )
         elif mode == "source":
             result = await asyncio.wait_for(
-                mode_source(reader=adapter, writer=adapter, size=size_bytes),
+                mode_source(
+                    reader=adapter,
+                    writer=adapter,
+                    size=size_bytes,
+                    chunk_size=chunk_size,
+                ),
                 timeout=timeout,
             )
         else:
@@ -434,11 +472,13 @@ async def run_bench(
             mode=mode,
             size_bytes=size_bytes,
             run_index=run_index,
-            ttfb_ms=result["ttfb_ms"],
             duration_ms=result["duration_ms"],
             throughput_mbps=result["throughput_mbps"],
             sha256_match=result.get("sha256_match", "na"),
+            fixture_sha256=fixture_sha256 or "na",
             error_class=result.get("error_class", "ok"),
+            upload_mbps=result.get("upload_mbps"),
+            download_mbps=result.get("download_mbps"),
         )
     except asyncio.TimeoutError:
         return RunResult(
@@ -446,22 +486,22 @@ async def run_bench(
             mode=mode,
             size_bytes=size_bytes,
             run_index=run_index,
-            ttfb_ms=0.0,
             duration_ms=0.0,
             throughput_mbps=0.0,
             sha256_match="false",
+            fixture_sha256="na",
             error_class="timeout",
         )
-    except ConnectionError:
+    except (EOFError, ConnectionError, asyncio.IncompleteReadError):
         return RunResult(
             ts_iso=ts_iso,
             mode=mode,
             size_bytes=size_bytes,
             run_index=run_index,
-            ttfb_ms=0.0,
             duration_ms=0.0,
             throughput_mbps=0.0,
             sha256_match="false",
+            fixture_sha256="na",
             error_class="connection_reset",
         )
     finally:
@@ -574,6 +614,11 @@ async def main_async(args: argparse.Namespace) -> int:
                 f"run {run_idx}: {result.mode} {result.size_bytes}B "
                 f"{result.throughput_mbps:.2f} Mbps [{status}]"
             )
+            if result.mode == "echo" and result.upload_mbps is not None:
+                print(
+                    f"  ↑ upload {result.upload_mbps:.2f} Mbps  "
+                    f"↓ download {result.download_mbps:.2f} Mbps"
+                )
     finally:
         emitter.close()
 

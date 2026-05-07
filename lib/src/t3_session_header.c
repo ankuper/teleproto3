@@ -17,6 +17,13 @@
 #include <string.h>
 #include <stdint.h>
 
+/* Known command types at v0.1.1: 0x01 MTPROTO_PASSTHROUGH, 0x04 BENCH.
+ * Shared by parser and serialiser to enforce command-type validity.
+ */
+static inline int t3_cmd_known(uint8_t c) {
+    return c == T3_CMD_MTPROTO_PASSTHROUGH || c == T3_CMD_BENCH;
+}
+
 /* ======================================================================
  * Session Header parse/serialise (spec/wire-format.md §3)
  * ====================================================================== */
@@ -31,15 +38,12 @@ T3_API t3_result_t t3_header_parse(const uint8_t buf[4], t3_header_t *out) {
     if (cmd == 0x00 || cmd == 0xFF) return T3_ERR_MALFORMED;
     /* Sentinel version 0x00: always MALFORMED. */
     if (version == 0x00) return T3_ERR_MALFORMED;
-    /* Known cmds: 0x01 MTPROTO_PASSTHROUGH, 0x04 BENCH (Epic 1a, lib-v0.1.1). */
-#define T3_KNOWN_CMD(c) ((c) == T3_CMD_MTPROTO_PASSTHROUGH || (c) == T3_CMD_BENCH)
     /* Known cmd, unknown version → UNSUPPORTED_VERSION. */
-    if (T3_KNOWN_CMD(cmd) && version > 0x01) return T3_ERR_UNSUPPORTED_VERSION;
+    if (t3_cmd_known(cmd) && version > 0x01) return T3_ERR_UNSUPPORTED_VERSION;
     /* Unknown cmd at known version → MALFORMED. */
-    if (!T3_KNOWN_CMD(cmd) && version == 0x01) return T3_ERR_MALFORMED;
+    if (!t3_cmd_known(cmd) && version == 0x01) return T3_ERR_MALFORMED;
     /* Unknown cmd at unknown version → UNSUPPORTED_VERSION (future-compat). */
-    if (!T3_KNOWN_CMD(cmd) && version > 0x01) return T3_ERR_UNSUPPORTED_VERSION;
-#undef T3_KNOWN_CMD
+    if (!t3_cmd_known(cmd) && version > 0x01) return T3_ERR_UNSUPPORTED_VERSION;
     /* Flags: at v0.1.x every bit MUST be zero. */
     if (flags != 0) return T3_ERR_MALFORMED;
 
@@ -51,6 +55,14 @@ T3_API t3_result_t t3_header_parse(const uint8_t buf[4], t3_header_t *out) {
 
 T3_API t3_result_t t3_header_serialise(const t3_header_t *in, uint8_t buf[4]) {
     if (!in || !buf) return T3_ERR_INVALID_ARG;
+    /* Sender duties (spec §3): MUST NOT emit sentinels, unknown cmds, unknown
+     * versions, or non-zero flags. Round-trip property: any output of this
+     * function MUST parse-OK; tightening to `version != 0x01` keeps that
+     * invariant at v0.1.1 (only known version). Loosen when v0.1.2+ adds new
+     * known versions — single-line edit. */
+    if (!t3_cmd_known(in->command_type)) return T3_ERR_MALFORMED;
+    if (in->version != 0x01) return T3_ERR_MALFORMED;
+    if (in->flags != 0) return T3_ERR_MALFORMED;
     buf[0] = in->command_type;
     buf[1] = in->version;
     buf[2] = (uint8_t)(in->flags & 0xFFu);          /* host→LE */
@@ -67,7 +79,7 @@ T3_API t3_result_t t3_session_negotiate_version(t3_session_t *sess,
                                                 t3_version_action_t *out) {
     if (!sess || !out) return T3_ERR_INVALID_ARG;
     if (peer_version == 0x01) { sess->peer_version = peer_version; *out = T3_VERSION_OK; }
-    else if (peer_version > 0x01) { *out = T3_VERSION_RETRY_DOWNGRADE; }
+    else if (peer_version > 0x01) { sess->peer_version = peer_version; *out = T3_VERSION_RETRY_DOWNGRADE; }
     else { *out = T3_VERSION_SILENT_CLOSE; }
     return T3_OK;
 }
@@ -88,6 +100,7 @@ t3_result_t t3_session_handle_header_byte(t3_session_t *s, uint8_t b) {
     rc = t3_session_negotiate_version(s, hdr.version, &action);
     if (rc != T3_OK) return rc;
     if (action != T3_VERSION_OK) return T3_ERR_UNSUPPORTED_VERSION;
+    s->command_type = hdr.command_type;
     return T3_OK;
 }
 

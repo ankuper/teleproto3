@@ -1,12 +1,18 @@
 """
 Tests for Story 1a-3 AC#5: CSV row output format.
 
-The bench client emits one CSV row per run with exactly 9 columns:
-    ts_iso, mode, size_bytes, run_index, ttfb_ms, duration_ms,
-    throughput_mbps, sha256_match, error_class
+The bench client emits one CSV row per run with exactly 11 columns:
+    ts_iso, mode, size_bytes, run_index, duration_ms, throughput_mbps,
+    upload_mbps, download_mbps, sha256_match, fixture_sha256, error_class
 
 Tests validate header structure, field constraints, value domains,
 and the CsvEmitter class.
+
+Note: ttfb_ms column was removed in Round 1 review (D1 resolution): per-row
+Python monotonic_ns() over chunked recv cannot honestly measure first-byte
+latency at sub-50µs precision (kernel-level instrumentation required for
+that — out of scope for v0.1.x dev-self-use bench). See deferred-work.md
+"option (e) backlog: stdout summary block".
 """
 
 from __future__ import annotations
@@ -17,18 +23,31 @@ from datetime import datetime
 
 import pytest
 
-CSV_HEADER = "ts_iso,mode,size_bytes,run_index,ttfb_ms,duration_ms,throughput_mbps,sha256_match,error_class"
+CSV_HEADER = (
+    "ts_iso,mode,size_bytes,run_index,duration_ms,throughput_mbps,"
+    "upload_mbps,download_mbps,sha256_match,fixture_sha256,error_class"
+)
 
-SAMPLE_ECHO_ROW = "2026-05-06T14:23:17.482Z,echo,1048576,1,12.34,847.21,9.89,true,ok"
+_FAKE_SHA256 = "aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd"
 
-SAMPLE_SINK_ROW = "2026-05-06T14:24:05.001Z,sink,10485760,3,8.72,1523.40,55.07,na,ok"
+# echo row: upload_mbps + download_mbps populated (full duplex mode)
+SAMPLE_ECHO_ROW = (
+    f"2026-05-06T14:23:17.482Z,echo,1048576,1,847.21,9.89,5.01,4.95,"
+    f"true,{_FAKE_SHA256},ok"
+)
+
+# sink row: upload/download na (single direction)
+SAMPLE_SINK_ROW = (
+    f"2026-05-06T14:24:05.001Z,sink,10485760,3,1523.40,55.07,na,na,"
+    f"na,{_FAKE_SHA256},ok"
+)
 
 SAMPLE_SOURCE_ROW = (
-    "2026-05-06T14:25:12.993Z,source,52428800,2,15.60,4201.88,99.84,na,ok"
+    "2026-05-06T14:25:12.993Z,source,52428800,2,4201.88,99.84,na,na,na,na,ok"
 )
 
 SAMPLE_ERROR_ROW = (
-    "2026-05-06T14:26:00.000Z,echo,1048576,0,0.00,0.00,0.00,false,handshake_fail"
+    "2026-05-06T14:26:00.000Z,echo,1048576,0,0.00,0.00,na,na,false,na,handshake_fail"
 )
 
 EXPECTED_COLUMNS = [
@@ -36,10 +55,12 @@ EXPECTED_COLUMNS = [
     "mode",
     "size_bytes",
     "run_index",
-    "ttfb_ms",
     "duration_ms",
     "throughput_mbps",
+    "upload_mbps",
+    "download_mbps",
     "sha256_match",
+    "fixture_sha256",
     "error_class",
 ]
 
@@ -50,7 +71,7 @@ def _parse_csv(header_and_rows: str) -> list[dict[str, str]]:
 
 
 def test_csv_header_fields():
-    """AC#5: CsvEmitter writes header with exactly 9 columns in order."""
+    """AC#5: CsvEmitter writes header with exactly 11 columns in order."""
     from teleproto3.bench.bench_client import CsvEmitter
 
     buf = io.StringIO()
@@ -62,7 +83,7 @@ def test_csv_header_fields():
 
     columns = header_line.split(",")
     assert columns == EXPECTED_COLUMNS
-    assert len(columns) == 9
+    assert len(columns) == 11
 
 
 def test_csv_row_valid_echo():
@@ -178,10 +199,10 @@ def test_csv_emitter_write_row(tmp_path):
         mode="echo",
         size_bytes=1024,
         run_index=0,
-        ttfb_ms=1.5,
         duration_ms=100.0,
         throughput_mbps=0.08,
         sha256_match="true",
+        fixture_sha256=_FAKE_SHA256,
         error_class="ok",
     )
     emitter.write_row(result)
@@ -208,10 +229,10 @@ def test_csv_emitter_append_mode(tmp_path):
                 mode="sink",
                 size_bytes=1024,
                 run_index=i,
-                ttfb_ms=1.0,
                 duration_ms=50.0,
                 throughput_mbps=0.16,
                 sha256_match="na",
+                fixture_sha256="na",
                 error_class="ok",
             )
         )
