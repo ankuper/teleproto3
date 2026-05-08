@@ -1458,7 +1458,19 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
         if (c->ws_frame_remaining == 0) {
           int payload_len = ws_parse_frame_header (c, &c->in);
           vkprintf (3, "WS_ACTIVE: ws_parse_frame_header returned %d\n", payload_len);
-          if (payload_len <= 0) {
+          if (payload_len < 0) {
+            /* WS close frame (opcode=0x8): clean up bench state, then close TCP.
+             * Without this, the mark slot leaks — after 64 connections the guard
+             * at bench_connection_is_marked() can't protect new connections. */
+#ifdef TELEPROTO3_BENCH
+            bench_session_destroy (c);
+            bench_connection_clear (c);
+#endif
+            rwm_free (&unmasked);
+            fail_connection (C, -1);
+            return SKIP_ALL_BYTES;
+          }
+          if (payload_len == 0) {
             break;
           }
         }
