@@ -56,6 +56,13 @@
 #include "net/net-websocket.h"
 #ifdef TELEPROTO3_DISPATCH_HOOK
 #include "net/net-type3-dispatch.h"
+#ifdef TELEPROTO3_BENCH
+#include "net/bench-handler.h"
+/* Forward decl from bench-session.c — drains c->in through the bench handler
+ * and writes any output to c->out as one WS frame. Returns 0 on success
+ * (caller continues), -1 on close-required (e.g. invalid sub-mode). */
+int bench_drain_connection(connection_job_t C);
+#endif
 #endif
 #include "net/net-tls-parse.h"
 #include "net/net-ip-acl.h"
@@ -1483,8 +1490,72 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
 #ifdef TELEPROTO3_DISPATCH_HOOK
       /* BEGIN AR-S2 dispatch hook (fork-local Type3 — see net-type3-dispatch.h) */
       {
+#ifdef TELEPROTO3_BENCH
+        /* Story 1a-2: a previously-installed bench session keeps draining
+         * here without a fresh dispatch; the BENCH path is intentionally
+         * pre-AES-CTR (see bench-handler.h header comment). */
+        bench_conn_t *bsess = bench_session_lookup(c);
+        if (bsess) {
+          int rc_drain = bench_drain_connection(C);
+          if (rc_drain < 0) {
+            /* P3 (R2): proactively close TCP after WS close-frame is queued
+             * — SKIP_ALL_BYTES alone leaves the connection half-open until
+             * client cooperates / idle timeout. AC #2 "closes" must hold
+             * regardless of client behaviour. */
+            bench_connection_clear(c);  /* 1a-9: release marker on close */
+            fail_connection (C, -1);
+            return SKIP_ALL_BYTES;
+          }
+          return NEED_MORE_BYTES;
+        }
+
+        /* Story 1a-9: bench-connection guard.
+         * bench_session_lookup() returned NULL for this connection.  Two cases:
+         *   (a) This is a genuine new connection — fall through to type3_dispatch.
+         *   (b) This connection was previously assigned TYPE3_DISPATCH_BENCH but
+         *       its session was destroyed prematurely (idle reaper, handler error,
+         *       or race). Without this guard the bench payload would be passed to
+         *       type3_dispatch_on_crypto_init(); random bytes may parse as a valid
+         *       Type3 session header, causing a spurious proxy_pass outbound
+         *       connection to a Telegram DC ("proxy pass connection" storm logged
+         *       on .252 during the 1a-5 full-matrix run at ≥ 10 MiB SINK/ECHO).
+         *
+         * bench_connection_is_marked() distinguishes (b) from (a): the mark is
+         * written by bench_connection_mark() when TYPE3_DISPATCH_BENCH is first
+         * dispatched and survives bench_session_destroy().  If the mark is set,
+         * close the connection gracefully instead of falling through to MTProto. */
+        if (bench_connection_is_marked(c)) {
+          vkprintf(1, "Type3 BENCH: session gone for marked bench conn fd=%d gen=%d — closing\n",
+                   c->fd, c->generation);
+          bench_connection_clear(c);
+          fail_connection (C, -1);
+          return SKIP_ALL_BYTES;
+        }
+#endif
         type3_dispatch_outcome_t r = type3_dispatch_on_crypto_init(C);
         if (r == TYPE3_DISPATCH_DROP_SILENT) { return SKIP_ALL_BYTES; }
+#ifdef TELEPROTO3_BENCH
+        if (r == TYPE3_DISPATCH_BENCH) {
+          if (bench_session_install(c) == NULL) {
+            /* P4 (R2): emit a WS close 1013 (Try Again Later) so the bench
+             * client can distinguish "registry full" from a generic transport
+             * failure. Then fail the TCP connection so we don't sit on the fd. */
+            vkprintf(0, "Type3 BENCH: session install failed (registry full or alloc); WS close 1013\n");
+            bench_emit_ws_close(c, 1013);
+            fail_connection (C, -1);
+            return SKIP_ALL_BYTES;
+          }
+          bench_connection_mark(c);  /* 1a-9: mark as bench — survives session destroy */
+          int rc_drain = bench_drain_connection(C);
+          if (rc_drain < 0) {
+            /* P3 (R2): see comment above — proactive TCP close. */
+            bench_connection_clear(c);  /* 1a-9: release marker on close */
+            fail_connection (C, -1);
+            return SKIP_ALL_BYTES;
+          }
+          return NEED_MORE_BYTES;
+        }
+#endif
         if (r == TYPE3_DISPATCH_ACCEPT)      { /* fall through to existing obfuscated2/MTProto logic */ }
         /* TYPE3_DISPATCH_PASSTHROUGH falls through to existing logic */
       }
