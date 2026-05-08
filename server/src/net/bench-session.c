@@ -201,7 +201,8 @@ static void bench_flush_out_to_socket(struct connection_info *c) {
         int chunk = c->out.total_bytes;
         if (chunk > 256 * MSG_STD_BUFFER) chunk = 256 * MSG_STD_BUFFER;
         int niov = rwm_prepare_iovec(&c->out, iov, 256, chunk);
-        if (niov <= 0) break;
+        if (niov == 0) break;
+        if (niov < 0) niov = 256;  /* iov full but more bytes remain — write batch and continue */
         ssize_t nw = writev(c->fd, iov, niov);
         if (nw < 0) {
             if (errno == EINTR) continue;
