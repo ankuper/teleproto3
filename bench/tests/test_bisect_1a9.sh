@@ -55,7 +55,7 @@ if [ -z "$BENCH_BIN" ]; then
     exit 77
 fi
 
-if ! nm "$BENCH_BIN" 2>/dev/null | grep -q "bench_drain_connection"; then
+if ! nm "$BENCH_BIN" 2>/dev/null | grep "bench_drain_connection" >/dev/null 2>&1; then
     skip "bench_binary" "binary lacks bench symbols (build with TELEPROTO3_BENCH=1)"
     printf '\n=== Results: %d passed, %d failed, %d skipped ===\n' "$PASS" "$FAIL" "$SKIP"
     exit 77
@@ -98,6 +98,7 @@ start_server() {
     "$BENCH_BIN" \
         -H "$port" \
         -S "$secret" \
+        --direct \
         --enable-bench-handler \
         >"$logfile" 2>&1 &
     SERVER_PID=$!
@@ -245,7 +246,7 @@ if [ -n "$BISECT_OUTPUT" ]; then
     ECHO_FF="${FIRST_FAIL_ECHO:-null}"
     python3 - <<PYEOF
 import json
-sizes = [${SIZES_MIB[*]}]
+sizes = [int(x) for x in "${SIZES_MIB[*]}".split()]
 results_raw = """$RESULTS_DATA"""
 rows = {}
 for line in results_raw.strip().splitlines():

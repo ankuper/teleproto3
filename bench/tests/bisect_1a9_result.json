@@ -1,0 +1,34 @@
+{
+  "story": "1a-9",
+  "binary": "/root/teleproto3/server/objs/bin/teleproxy",
+  "bisect_mib": [
+    1,
+    2,
+    4,
+    6,
+    8,
+    10
+  ],
+  "results": {
+    "sink": {
+      "1": "ok",
+      "2": "ok",
+      "4": "ok",
+      "6": "ok",
+      "8": "ok",
+      "10": "ok"
+    },
+    "echo": {
+      "1": "ok",
+      "2": "ok",
+      "4": "ok",
+      "6": "ok",
+      "8": "ok",
+      "10": "ok"
+    }
+  },
+  "first_fail": {
+    "sink": null,
+    "echo": null
+  }
+}

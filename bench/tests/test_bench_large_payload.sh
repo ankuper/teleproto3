@@ -67,7 +67,7 @@ if [ -z "$BENCH_BIN" ]; then
     exit 77
 fi
 
-if ! nm "$BENCH_BIN" 2>/dev/null | grep -q "bench_drain_connection"; then
+if ! nm "$BENCH_BIN" 2>/dev/null | grep "bench_drain_connection" >/dev/null 2>&1; then
     skip "bench_binary" "binary lacks bench symbols (build with TELEPROTO3_BENCH=1)"
     printf '\n=== Results: %d passed, %d failed, %d skipped ===\n' "$PASS" "$FAIL" "$SKIP"
     exit 77
@@ -109,6 +109,7 @@ trap cleanup EXIT
 "$BENCH_BIN" \
     -H "$PORT" \
     -S "$SERVER_SECRET" \
+    --direct \
     --enable-bench-handler \
     >"$TMPDIR_TEST/server.log" 2>&1 &
 SERVER_PID=$!
