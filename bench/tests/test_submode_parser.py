@@ -90,14 +90,17 @@ def test_secret_parsing():
     """parse_secret_hex correctly splits host and path."""
     from teleproto3.bench.type3_protocol import parse_secret_hex
 
-    hex_str = "ff78ef151a20066770db00a2f905c103e96172637469632d627265657a652e6d792e69642f77732f376633346261"
+    # Synthetic test secret: 0xFF + 16-byte test key + "example.com/ws/test"
+    test_key_hex = "deadbeef01234567deadbeef01234567"
+    domain_hex = "6578616d706c652e636f6d2f77732f74657374"  # "example.com/ws/test"
+    hex_str = "ff" + test_key_hex + domain_hex
     parsed = parse_secret_hex(hex_str)
 
     assert parsed["marker"] == 0xFF
-    assert parsed["key"] == bytes.fromhex("78ef151a20066770db00a2f905c103e9")
-    assert parsed["host"] == "arctic-breeze.my.id"
-    assert parsed["path"] == "/ws/7f34ba"
-    assert parsed["domain"] == "arctic-breeze.my.id/ws/7f34ba"
+    assert parsed["key"] == bytes.fromhex(test_key_hex)
+    assert parsed["host"] == "example.com"
+    assert parsed["path"] == "/ws/test"
+    assert parsed["domain"] == "example.com/ws/test"
 
 
 def test_secret_parsing_no_path():
@@ -108,4 +111,4 @@ def test_secret_parsing_no_path():
     parsed = parse_secret_hex(hex_str)
 
     assert parsed["host"] == "example.com"
-    assert parsed["path"] == "/"
+    assert parsed["path"] == ""

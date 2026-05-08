@@ -112,6 +112,33 @@ SECRET=$(head -c 16 /dev/urandom | xxd -ps)
 - `ghcr.io/teleproxy/teleproxy:latest`
 - `rkline0x/teleproxy:latest` (Docker Hub)
 
+## Dev-only: Type3 bench handler (Story 1a-2)
+
+Releases ship **without** the bench dispatch path. To exercise the
+in-channel `command_type=0x04` (`T3_CMD_BENCH`) handler used by Epic 1a
+throughput measurements, build the server explicitly with the flag and
+launch with the runtime gate:
+
+```bash
+make TELEPROTO3_BENCH=1 -j$(nproc)
+./objs/bin/teleproxy --enable-bench-handler ...
+```
+
+Both gates are required. Either off → bench symbols are absent from the
+release binary. The canonical CI pattern checks BOTH the static and
+dynamic symbol tables against:
+
+```
+nm "$BIN"             | grep -E 'bench_handler|bench_session|bench_drain|bench_csprng|g_bench_'
+nm --dynamic "$BIN"   | grep -E 'bench_handler|bench_session|bench_drain|bench_csprng|g_bench_'
+```
+
+— enforced in [`bench-release-audit.yml`](../.github/workflows/bench-release-audit.yml)
+(teleproto3 standalone repo) and in the parent MTProxy CI on its release
+build. Either gate off → the dispatch case rejects 0x04 traffic. Sandbox
+topology and prod-isolation guidance live in
+[`docs/bench-deploy.md`](docs/bench-deploy.md).
+
 ## License
 
 GPLv2 — see [LICENSE](LICENSE).

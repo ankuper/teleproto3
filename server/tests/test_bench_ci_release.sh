@@ -20,22 +20,65 @@ skip() { SKIP=$((SKIP+1)); printf '  SKIP [%s]: %s\n' "$1" "${2:-}"; }
 printf '\n=== Story 1a-2/1a-3/1a-5: CI/lint assertions ===\n\n'
 
 # ---------------------------------------------------------------------------
-# 1. bench_symbols_absent_release (1a-2 AC#4)
+# 1. bench_symbols_absent_release (1a-2 AC #4)
+# Story 1a-2 builds at server/objs/bin/teleproxy; legacy upstream paths
+# (objs/bin/mtproto-proxy) are also accepted to ease local re-runs.
 # ---------------------------------------------------------------------------
 echo '--- bench_symbols_absent_release ---'
-RELEASE_BIN="$PROJECT_ROOT/objs/bin/mtproto-proxy"
-if [ ! -f "$RELEASE_BIN" ]; then
-    skip "bench_symbols_absent_release" "binary $RELEASE_BIN not found"
+RELEASE_BIN=""
+for cand in \
+    "$PROJECT_ROOT/teleproto3/server/objs/bin/teleproxy" \
+    "$PROJECT_ROOT/teleproto3/server/objs/bin/mtproto-proxy" \
+    "$PROJECT_ROOT/objs/bin/teleproxy" \
+    "$PROJECT_ROOT/objs/bin/mtproto-proxy"; do
+    if [ -f "$cand" ]; then RELEASE_BIN="$cand"; break; fi
+done
+if [ -z "$RELEASE_BIN" ]; then
+    skip "bench_symbols_absent_release" "no server binary found (built objs/bin/teleproxy?)"
 else
     if ! command -v nm >/dev/null 2>&1; then
         skip "bench_symbols_absent_release" "nm not found in PATH"
     else
-        bench_count="$(nm "$RELEASE_BIN" 2>/dev/null | grep -c bench_handler || true)"
-        if [ "$bench_count" -eq 0 ]; then
-            pass "bench_symbols_absent_release"
-        else
+        # C11: guard against stripped binaries reporting 0 symbols as false-pass
+        total_syms="$(nm "$RELEASE_BIN" 2>/dev/null | wc -l | tr -d ' ')"
+        dyn_syms="$(nm --dynamic "$RELEASE_BIN" 2>/dev/null | wc -l | tr -d ' ')"
+        # P9 (R2): use OR — if EITHER table is empty the binary is partially
+        # stripped and the audit becomes unreliable for that table. Strict
+        # release builds keep both populated.
+        if [ "$total_syms" -eq 0 ] || [ "$dyn_syms" -eq 0 ]; then
             fail "bench_symbols_absent_release" \
-                "expected 0 bench_handler symbols in release binary, found $bench_count"
+                "nm returned 0 symbols on at least one table (total=$total_syms dyn=$dyn_syms) — binary may be partially stripped; audit unreliable"
+        else
+            # C11: extended pattern covers all bench TU entry points
+            # P8 (R2): grep -c returns 0 (matches), 1 (no matches), >=2 (real error).
+            # The previous `|| true` collapsed all three into "clean pass". Instead
+            # we capture the exit code explicitly and only swallow rc == 1.
+            bench_pattern='bench_handler|bench_session|bench_drain|bench_csprng|g_bench_'
+            count_pattern() {
+                local table_dump=$1 label=$2 out gc
+                set +e
+                out=$(printf '%s' "$table_dump" | grep -cE "$bench_pattern")
+                gc=$?
+                set -e
+                if [ "$gc" -gt 1 ]; then
+                    fail "bench_symbols_absent_release" \
+                        "grep -c failed on $label table (exit=$gc) — pattern malformed or stream error"
+                    printf '0'
+                    return 1
+                fi
+                printf '%s' "$out"
+            }
+            static_dump="$(nm "$RELEASE_BIN" 2>/dev/null || true)"
+            dyn_dump="$(nm --dynamic "$RELEASE_BIN" 2>/dev/null || true)"
+            bench_count="$(count_pattern "$static_dump" 'static')"
+            dyn_bench_count="$(count_pattern "$dyn_dump" 'dynamic')"
+            total_bench=$((bench_count + dyn_bench_count))
+            if [ "$total_bench" -eq 0 ]; then
+                pass "bench_symbols_absent_release ($RELEASE_BIN)"
+            else
+                fail "bench_symbols_absent_release" \
+                    "expected 0 bench symbols in $RELEASE_BIN, found $total_bench (static=$bench_count dynamic=$dyn_bench_count)"
+            fi
         fi
     fi
 fi

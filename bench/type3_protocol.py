@@ -298,23 +298,30 @@ async def _read_ws_frame(
 
 
 class Type3Connection:
-    """Wraps a raw TCP connection with Type3 WS framing + AES-CTR encryption."""
+    """Wraps a raw TCP connection with Type3 WS framing + AES-CTR encryption.
+
+    For command_type=BENCH (0x04) the wire is intentionally pre-AES-CTR per
+    server bench-handler contract (see net-tcp-rpc-ext-server.c:1496); the
+    `plaintext_mode` flag bypasses encryption/decryption entirely.
+    """
 
     def __init__(
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
         session: Type3Session,
+        plaintext_mode: bool = False,
     ):
         self._reader = reader
         self._writer = writer
         self._session = session
         self._read_buf = bytearray()
+        self._plaintext_mode = plaintext_mode
 
     async def send(self, plaintext: bytes) -> None:
-        """Encrypt and send data as a masked WS binary frame."""
-        ciphertext = self._session.encrypt(plaintext)
-        frame = _build_ws_frame(ciphertext, opcode=0x02, mask=True)
+        """Send data as a masked WS binary frame (encrypted unless plaintext_mode)."""
+        payload = plaintext if self._plaintext_mode else self._session.encrypt(plaintext)
+        frame = _build_ws_frame(payload, opcode=0x02, mask=True)
         self._writer.write(frame)
         await self._writer.drain()
 
@@ -325,15 +332,15 @@ class Type3Connection:
         await self._writer.drain()
 
     async def recv(self, n: int) -> bytes:
-        """Receive and decrypt exactly n bytes from the WS stream.
+        """Receive exactly n bytes from the WS stream (decrypts unless plaintext_mode).
 
         Passes self._writer to _read_ws_frame so PINGs get a PONG response per
         RFC 6455 §5.5.2 (P7).
         """
         while len(self._read_buf) < n:
             frame_data = await _read_ws_frame(self._reader, self._writer)
-            decrypted = self._session.decrypt(frame_data)
-            self._read_buf.extend(decrypted)
+            chunk = frame_data if self._plaintext_mode else self._session.decrypt(frame_data)
+            self._read_buf.extend(chunk)
         result = bytes(self._read_buf[:n])
         self._read_buf = self._read_buf[n:]
         return result
@@ -343,7 +350,7 @@ class Type3Connection:
         frame_data = await _read_ws_frame(self._reader, self._writer)
         if not frame_data:
             return b""
-        return self._session.decrypt(frame_data)
+        return frame_data if self._plaintext_mode else self._session.decrypt(frame_data)
 
     async def close(self) -> None:
         self._writer.close()
@@ -396,7 +403,26 @@ async def connect_type3(
     body_start = _parse_ws_upgrade_response(response, ws_key)
     leftover = response[body_start:]
 
-    # Generate random_header and derive AES-CTR keys
+    # BENCH command (0x04) is pre-AES-CTR per server contract:
+    # session_header (4 bytes plaintext) followed by plaintext bench traffic.
+    # No random_header, no obf2 setup, no AES-CTR.
+    if command_type == T3_CMD_BENCH:
+        session = Type3Session(
+            read_encryptor=None,
+            write_encryptor=None,
+            random_header=b"",
+            command_type=command_type,
+        )
+        session_header = build_session_header(command_type)
+        frame = _build_ws_frame(session_header, opcode=0x02, mask=True)
+        writer.write(frame)
+        await writer.drain()
+        conn = Type3Connection(reader, writer, session, plaintext_mode=True)
+        if leftover:
+            conn._read_buf.extend(leftover)
+        return conn, session
+
+    # Generate random_header and derive AES-CTR keys (PASSTHROUGH path)
     random_header, client_write_enc, client_read_enc = _make_random_header(secret)
 
     session = Type3Session(

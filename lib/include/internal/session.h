@@ -23,6 +23,7 @@ struct t3_session {
     uint8_t            parse_buf[4];
     size_t             parse_buf_len;
     uint8_t            peer_version;
+    uint8_t            command_type;  /* negotiated command_type from session header */
     uint8_t            local_version;
     t3_retry_ring_t    ring;
     t3_retry_state_t   state;

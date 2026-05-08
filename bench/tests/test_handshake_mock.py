@@ -38,7 +38,7 @@ def test_session_header_passthrough():
 
 def test_kdf_deterministic():
     """Same random_header + secret_key always produces same keys."""
-    secret = bytes.fromhex("78ef151a20066770db00a2f905c103e9")
+    secret = bytes.fromhex("deadbeef01234567deadbeef01234567")
     rh = bytes(range(64))
 
     k1 = _derive_keys(rh, secret)
@@ -80,7 +80,7 @@ def test_kdf_write_key_formula():
 
 def test_random_header_magic_tag():
     """Generated random_header decrypts to a valid magic tag at [56:60)."""
-    secret = bytes.fromhex("78ef151a20066770db00a2f905c103e9")
+    secret = bytes.fromhex("deadbeef01234567deadbeef01234567")
     rh, _, _ = _make_random_header(secret)
 
     read_key, read_iv, _, _ = _derive_keys(rh, secret)
@@ -93,7 +93,7 @@ def test_random_header_magic_tag():
 
 def test_encryption_round_trip():
     """Data encrypted by client can be decrypted by server (simulated)."""
-    secret = bytes.fromhex("78ef151a20066770db00a2f905c103e9")
+    secret = bytes.fromhex("deadbeef01234567deadbeef01234567")
     rh, client_write, client_read = _make_random_header(secret)
 
     read_key, read_iv, write_key, write_iv = _derive_keys(rh, secret)
@@ -111,7 +111,7 @@ def test_encryption_round_trip():
 
 def test_encryption_both_directions():
     """Bidirectional encryption: client→server and server→client."""
-    secret = bytes.fromhex("78ef151a20066770db00a2f905c103e9")
+    secret = bytes.fromhex("deadbeef01234567deadbeef01234567")
     rh, client_write, client_read = _make_random_header(secret)
 
     read_key, read_iv, write_key, write_iv = _derive_keys(rh, secret)

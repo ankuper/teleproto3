@@ -13,6 +13,10 @@
 #include "net/net-connections.h"
 #include "net/net-msg.h"
 
+#ifdef TELEPROTO3_BENCH
+#include "net/bench-handler.h"
+#endif
+
 #include "jobs/jobs.h"
 #include "common/precise-time.h"
 #include "common/kprintf.h"
@@ -312,6 +316,22 @@ type3_dispatch_outcome_t type3_dispatch_on_crypto_init(connection_job_t C) {
 
     T3_STAT_INC(t3_stat_connections_total_type3_accept);
     T3_STAT_ADD(t3_stat_connections_active, 1);
+
+#ifdef TELEPROTO3_BENCH
+    /* Story 1a-2: BENCH command short-circuits the obf2/MTProto path.
+     * Both gates required: TELEPROTO3_BENCH compile-time AND the runtime
+     * --enable-bench-handler flag. */
+    if (hdr.command_type == T3_CMD_BENCH && g_bench_handler_enabled) {
+        vkprintf(1, "Type3 dispatch: BENCH command — routing to bench handler\n");
+        return TYPE3_DISPATCH_BENCH;
+    }
+#endif
+    /* C2 (1a-2): Release builds and dev builds without --enable-bench-handler
+     * must silently drop 0x04.  Without this guard, T3_CMD_BENCH falls through
+     * to TYPE3_DISPATCH_ACCEPT and enters the obf2/MTProto path. */
+    if (hdr.command_type == T3_CMD_BENCH) {
+        return TYPE3_DISPATCH_DROP_SILENT;
+    }
 
     return TYPE3_DISPATCH_ACCEPT;
 }

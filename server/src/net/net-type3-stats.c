@@ -20,6 +20,10 @@
 #include "net/net-type3-stats.h"
 #include "common/common-stats.h"
 
+#ifdef TELEPROTO3_BENCH
+#include "net/bench-handler.h"
+#endif
+
 #include <stdint.h>
 
 /* ------------------------------------------------------------------ */
@@ -193,4 +197,19 @@ void type3_stats_emit_prometheus (stats_buffer_t *sb) {
         T3_STAT_LOAD (t3_stat_probe_drop_ns_p50),
         T3_STAT_LOAD (t3_stat_probe_drop_ns_p95),
         T3_STAT_LOAD (t3_stat_probe_drop_ns_p99));
+
+#ifdef TELEPROTO3_BENCH
+    /* Story 1a-2 AC #6: per-mode bench bytes counters. Only emitted in builds
+     * with TELEPROTO3_BENCH=1 — release artefacts must not contain these. */
+    bench_stats_t bs = bench_handler_get_stats();
+    sb_printf (sb,
+        "# HELP teleproto3_bench_bytes_total DEV-ONLY bench-handler bytes processed by sub-mode.\n"
+        "# TYPE teleproto3_bench_bytes_total counter\n"
+        "teleproto3_bench_bytes_total{mode=\"sink\"} %llu\n"
+        "teleproto3_bench_bytes_total{mode=\"echo\"} %llu\n"
+        "teleproto3_bench_bytes_total{mode=\"source\"} %llu\n",
+        (unsigned long long)bs.sink_bytes,
+        (unsigned long long)bs.echo_bytes,
+        (unsigned long long)bs.source_bytes);
+#endif
 }

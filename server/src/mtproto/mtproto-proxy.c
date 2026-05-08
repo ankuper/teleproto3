@@ -1562,6 +1562,16 @@ int f_parse_option (int val) {
       dc_probe_interval_from_cli = 0;
     }
     break;
+#ifdef TELEPROTO3_BENCH
+  case 2010:
+    /* Story 1a-2: explicit opt-in for the BENCH dispatch path. Default OFF
+     * even in dev builds — both compile-time TELEPROTO3_BENCH and this
+     * runtime gate must be set before the handler is reachable. */
+    extern int g_bench_handler_enabled;
+    g_bench_handler_enabled = 1;
+    kprintf ("--enable-bench-handler: Type3 BENCH command (0x04) dispatch enabled — DEV-ONLY\n");
+    break;
+#endif
   default:
     return -1;
   }
@@ -1589,6 +1599,9 @@ void mtfront_prepare_parse_options (void) {
   parse_option ("socks5", required_argument, 0, 2007, "route upstream DC connections through SOCKS5 proxy (socks5://[user:pass@]host:port)");
   parse_option ("proxy-protocol", no_argument, 0, 2008, "enable PROXY protocol v1/v2 on client listeners (for use behind HAProxy/nginx/NLB)");
   parse_option ("dc-probe-interval", required_argument, 0, 2009, "seconds between DC health probes (0=disabled, default 0)");
+#ifdef TELEPROTO3_BENCH
+  parse_option ("enable-bench-handler", no_argument, 0, 2010, "DEV ONLY: enable Type3 BENCH command (0x04) dispatch (Story 1a-2). Requires build with TELEPROTO3_BENCH=1");
+#endif
 }
 
 void mtfront_parse_extra_args (int argc, char *argv[]) /* {{{ */ {

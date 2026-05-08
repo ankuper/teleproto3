@@ -24,7 +24,10 @@
 typedef enum {
     TYPE3_DISPATCH_PASSTHROUGH  = 0, /* not a Type3 session — fall through */
     TYPE3_DISPATCH_ACCEPT       = 1, /* valid Type3 header — proceed to obf2 */
-    TYPE3_DISPATCH_DROP_SILENT  = 2  /* bad/probe header — silent close */
+    TYPE3_DISPATCH_DROP_SILENT  = 2, /* bad/probe header — silent close */
+#ifdef TELEPROTO3_BENCH
+    TYPE3_DISPATCH_BENCH        = 3  /* dev-only T3_CMD_BENCH (Story 1a-2) */
+#endif
 } type3_dispatch_outcome_t;
 
 /* --------------------------------------------------------------------

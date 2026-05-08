@@ -102,30 +102,39 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. commit_bundles_artefacts (AC#8)
-#    --commit creates timestamped dir under _bmad-output/measurements/
+# 4. commit_dry_run_no_state_mutation (AC#8 + P8)
+#    --commit --dry-run MUST NOT create a bundle dir or mutate any artefact
+#    on disk. Real commit-bundling requires a live bench server and is
+#    exercised end-to-end during a real --commit run.
 # ---------------------------------------------------------------------------
-printf '%s\n' '--- commit_bundles_artefacts ---'
+printf '%s\n' '--- commit_dry_run_no_state_mutation ---'
 
 MEASUREMENTS_DIR="$PROJECT_ROOT/_bmad-output/measurements"
-before_dirs="$(ls "$MEASUREMENTS_DIR" 2>/dev/null | sort)"
+_list_measurements_dir() {
+    if [ -d "$MEASUREMENTS_DIR" ]; then
+        ls "$MEASUREMENTS_DIR" 2>/dev/null | sort
+    else
+        echo ""
+    fi
+}
+before_dirs="$(_list_measurements_dir)"
 
 (cd "$BENCH_DIR" && bash "$BENCH_SH" --commit --dry-run 2>&1) >/dev/null || true
 
-after_dirs="$(ls "$MEASUREMENTS_DIR" 2>/dev/null | sort)"
+after_dirs="$(_list_measurements_dir)"
 
-if [ "$before_dirs" != "$after_dirs" ]; then
-    pass "commit_bundles_artefacts"
+if [ "$before_dirs" = "$after_dirs" ]; then
+    pass "commit_dry_run_no_state_mutation"
 else
-    fail "commit_bundles_artefacts" \
-        "no new timestamped directory created under $MEASUREMENTS_DIR"
+    fail "commit_dry_run_no_state_mutation" \
+        "--commit --dry-run mutated $MEASUREMENTS_DIR (P8: dry-run must not write to disk)"
 fi
 
 # ---------------------------------------------------------------------------
-# 5. commit_appends_index (AC#8)
-#    After --commit, INDEX.md grows
+# 5. commit_dry_run_does_not_touch_index (AC#8 + P8)
+#    --commit --dry-run MUST NOT append to INDEX.md.
 # ---------------------------------------------------------------------------
-printf '%s\n' '--- commit_appends_index ---'
+printf '%s\n' '--- commit_dry_run_does_not_touch_index ---'
 
 INDEX_MD="$MEASUREMENTS_DIR/INDEX.md"
 if [ -f "$INDEX_MD" ]; then
@@ -142,11 +151,11 @@ else
     after_lines=0
 fi
 
-if [ "$after_lines" -gt "$before_lines" ]; then
-    pass "commit_appends_index"
+if [ "$after_lines" -eq "$before_lines" ]; then
+    pass "commit_dry_run_does_not_touch_index"
 else
-    fail "commit_appends_index" \
-        "INDEX.md did not grow (before=$before_lines, after=$after_lines)"
+    fail "commit_dry_run_does_not_touch_index" \
+        "INDEX.md grew during dry-run (before=$before_lines, after=$after_lines; P8: dry-run must not mutate state)"
 fi
 
 # ---------------------------------------------------------------------------

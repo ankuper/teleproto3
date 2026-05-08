@@ -547,6 +547,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--runs", type=int, default=1, help="number of runs (default 1)"
     )
+    parser.add_argument(
+        "--run-index",
+        type=int,
+        default=0,
+        help="starting run_index for emitted CSV rows (default 0; bench.sh sets per-iteration)",
+    )
     parser.add_argument("--output", default=DEFAULT_OUTPUT, help="CSV output path")
     parser.add_argument("--server", help="server hostname")
     parser.add_argument("--port", type=int, default=443, help="server port")
@@ -601,7 +607,7 @@ async def main_async(args: argparse.Namespace) -> int:
                 fixture_data=fixture_data,
                 fixture_sha256=fixture_sha256,
                 size_bytes=size_bytes,
-                run_index=run_idx,
+                run_index=args.run_index + run_idx,
                 chunk_size=args.chunk_size,
                 ack_mode=args.ack_mode,
                 port=args.port,

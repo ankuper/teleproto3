@@ -55,6 +55,17 @@ endif
 COMMON_CFLAGS += $(EXTRA_CFLAGS)
 COMMON_LDFLAGS += $(EXTRA_LDFLAGS)
 
+# Story 1a-2: opt-in Type3 BENCH dispatch (DEV ONLY). Default OFF — release CI
+# MUST NOT set this. Build with `make TELEPROTO3_BENCH=1` to compile in the
+# bench symbols (also requires --enable-bench-handler at runtime to engage).
+TELEPROTO3_BENCH ?= 0
+ifeq ($(TELEPROTO3_BENCH), 1)
+  COMMON_CFLAGS += -DTELEPROTO3_BENCH
+  BENCH_OBJS := ${OBJ}/src/net/bench-handler.o ${OBJ}/src/net/bench-session.o
+else
+  BENCH_OBJS :=
+endif
+
 # Architecture-specific CFLAGS
 ifeq ($(HOST_ARCH), x86_64)
 CFLAGS := $(COMMON_CFLAGS) -mpclmul -march=core2 -mfpmath=sse -mssse3 $(BITNESS_FLAGS)
@@ -91,7 +102,7 @@ EXELIST	:= ${EXE}/teleproxy
 
 OBJECTS	=	\
   ${OBJ}/src/mtproto/mtproto-proxy.o ${OBJ}/src/mtproto/mtproto-proxy-stats.o ${OBJ}/src/mtproto/mtproto-proxy-http.o ${OBJ}/src/mtproto/mtproto-config.o ${OBJ}/src/mtproto/mtproto-dc-table.o ${OBJ}/src/mtproto/mtproto-dc-probes.o ${OBJ}/src/mtproto/mtproto-check.o ${OBJ}/src/mtproto/mtproto-link.o ${OBJ}/src/net/net-tcp-rpc-ext-server.o ${OBJ}/src/net/net-tcp-rpc-ext-drain.o ${OBJ}/src/net/net-tcp-rpc-ext-top-ips.o ${OBJ}/src/net/net-tcp-direct-dc.o \
-  ${OBJ}/src/net/net-type3-dispatch.o
+  ${OBJ}/src/net/net-type3-dispatch.o $(BENCH_OBJS)
 
 DEPENDENCE_CXX		:=	$(subst ${OBJ}/,${DEP}/,$(patsubst %.o,%.d,${OBJECTS_CXX}))
 DEPENDENCE_STRANGE	:=	$(subst ${OBJ}/,${DEP}/,$(patsubst %.o,%.d,${OBJECTS_STRANGE}))
@@ -156,7 +167,7 @@ ${EXELIST}: ${LIBLIST} ${T3_STATIC_LIB}
 ${T3_STATIC_LIB}:
 	$(MAKE) -C $(T3_LIB_DIR)/build
 
-${EXE}/teleproxy:	${OBJ}/src/mtproto/mtproto-proxy.o ${OBJ}/src/mtproto/mtproto-proxy-stats.o ${OBJ}/src/mtproto/mtproto-proxy-http.o ${OBJ}/src/mtproto/mtproto-config.o ${OBJ}/src/mtproto/mtproto-dc-table.o ${OBJ}/src/mtproto/mtproto-dc-probes.o ${OBJ}/src/mtproto/mtproto-check.o ${OBJ}/src/mtproto/mtproto-link.o ${OBJ}/src/net/net-tcp-rpc-ext-server.o ${OBJ}/src/net/net-tcp-rpc-ext-drain.o ${OBJ}/src/net/net-tcp-rpc-ext-top-ips.o ${OBJ}/src/net/net-tcp-direct-dc.o ${OBJ}/src/net/net-type3-dispatch.o
+${EXE}/teleproxy:	${OBJ}/src/mtproto/mtproto-proxy.o ${OBJ}/src/mtproto/mtproto-proxy-stats.o ${OBJ}/src/mtproto/mtproto-proxy-http.o ${OBJ}/src/mtproto/mtproto-config.o ${OBJ}/src/mtproto/mtproto-dc-table.o ${OBJ}/src/mtproto/mtproto-dc-probes.o ${OBJ}/src/mtproto/mtproto-check.o ${OBJ}/src/mtproto/mtproto-link.o ${OBJ}/src/net/net-tcp-rpc-ext-server.o ${OBJ}/src/net/net-tcp-rpc-ext-drain.o ${OBJ}/src/net/net-tcp-rpc-ext-top-ips.o ${OBJ}/src/net/net-tcp-direct-dc.o ${OBJ}/src/net/net-type3-dispatch.o $(BENCH_OBJS)
 	${CC} -o $@ $^ ${LDFLAGS} -L$(T3_LIB_DIR)/build -lteleproto3
 
 ${LIB}/libkdb.a: ${LIB_OBJS}

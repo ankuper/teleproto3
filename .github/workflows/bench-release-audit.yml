@@ -1,0 +1,180 @@
+# bench-release-audit.yml — Story 1a-2 AC #4
+#
+# Asserts that release server builds (no TELEPROTO3_BENCH) carry no
+# bench_handler symbols. Builds the server with the default flags and runs
+# tests/test_bench_ci_release.sh. Failure here means a release artefact
+# leaked the dev-only bench code path — block the merge.
+#
+# Companion workflow: build-server.yml ships the docker image; this audit
+# is independent and runs natively to keep the assertion close to the source.
+
+name: bench-release-audit
+
+on:
+  pull_request:
+    paths:
+      - "server/**"
+      - "lib/**"
+      - ".github/workflows/bench-release-audit.yml"
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  no-bench-symbols-in-release:
+    name: "AC #4: no bench_handler symbols in release server binary"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Install build dependencies"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libssl-dev zlib1g-dev binutils
+
+      - name: "Build libteleproto3 (release flags)"
+        run: |
+          set -euo pipefail
+          make -C teleproto3/lib -j"$(nproc)"
+
+      - name: "Build server (release; TELEPROTO3_BENCH unset)"
+        run: |
+          set -euo pipefail
+          make -C teleproto3/server -j"$(nproc)" \
+            T3_LIB_DIR=../lib
+
+      - name: "Assert bench symbols absent (Story 1a-2 AC #4)"
+        run: |
+          set -euo pipefail
+          chmod +x teleproto3/server/tests/test_bench_ci_release.sh
+          # The script greps the binary at objs/bin/mtproto-proxy. Symlink
+          # the actual produced binary path so the script finds it under the
+          # path it expects.
+          mkdir -p teleproto3/server/objs/bin
+          if [ ! -e teleproto3/server/objs/bin/mtproto-proxy ]; then
+            ln -sf "$(pwd)/teleproto3/server/objs/bin/teleproxy" \
+                   teleproto3/server/objs/bin/mtproto-proxy
+          fi
+          teleproto3/server/tests/test_bench_ci_release.sh
+
+      - name: "Defence in depth: nm sanity check (C11 extended; R2 P8/P9)"
+        run: |
+          set -euo pipefail
+          BIN=teleproto3/server/objs/bin/teleproxy
+          test -f "$BIN"
+          # P9 (R2): use OR — if EITHER table is empty the binary is partially
+          # stripped and the audit is unreliable for that table.
+          total_syms="$(nm "$BIN" 2>/dev/null | wc -l)"
+          dyn_syms="$(nm --dynamic "$BIN" 2>/dev/null | wc -l)"
+          if [ "$total_syms" -eq 0 ] || [ "$dyn_syms" -eq 0 ]; then
+            echo "FAIL: nm returned 0 symbols on at least one table (total=$total_syms dyn=$dyn_syms) — binary partially stripped; audit unreliable"
+            exit 1
+          fi
+          # Extended pattern: all bench TU entry points, static + dynamic symbol tables.
+          PATTERN='bench_handler|bench_session|bench_drain|bench_csprng|g_bench_'
+          # P8 (R2): grep -c returns 0 (matches), 1 (no matches), >=2 (real error).
+          # Capture the exit code explicitly and only swallow rc == 1.
+          count_pattern() {
+            local stream label rc out
+            stream="$1"; label="$2"
+            set +e
+            out="$(printf '%s' "$stream" | grep -cE "$PATTERN")"
+            rc=$?
+            set -e
+            if [ "$rc" -gt 1 ]; then
+              echo "FAIL: grep -c failed on $label table (exit=$rc) — pattern malformed or stream error" >&2
+              exit "$rc"
+            fi
+            printf '%s' "$out"
+          }
+          static_dump="$(nm "$BIN" 2>/dev/null || true)"
+          dyn_dump="$(nm --dynamic "$BIN" 2>/dev/null || true)"
+          static_hit="$(count_pattern "$static_dump" 'static')"
+          dyn_hit="$(count_pattern "$dyn_dump" 'dynamic')"
+          total_hit=$((static_hit + dyn_hit))
+          if [ "$total_hit" -gt 0 ]; then
+            echo "FAIL: release binary contains $total_hit bench symbol(s)"
+            printf '%s\n' "$static_dump" | grep -E "$PATTERN" || true
+            printf '%s\n' "$dyn_dump"    | grep -E "$PATTERN" || true
+            exit 1
+          fi
+          echo "OK: no bench symbols in release binary (checked static=$total_syms dyn=$dyn_syms symbols)"
+
+  # P10 (R2): positive-control build — if the grep pattern develops a typo,
+  # the negative test alone would silently pass forever. This job builds with
+  # TELEPROTO3_BENCH=1 and asserts the SAME pattern WOULD find symbols when
+  # they exist; without this, audit drift goes undetected.
+  positive-control:
+    name: "P10: positive-control — pattern matches when bench is enabled"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Install build dependencies"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential libssl-dev zlib1g-dev binutils
+
+      - name: "Build libteleproto3 (release flags)"
+        run: |
+          set -euo pipefail
+          make -C teleproto3/lib -j"$(nproc)"
+
+      - name: "Build server with TELEPROTO3_BENCH=1 TELEPROTO3_DISPATCH_HOOK=1"
+        run: |
+          set -euo pipefail
+          make -C teleproto3/server \
+            TELEPROTO3_BENCH=1 TELEPROTO3_DISPATCH_HOOK=1 \
+            -j"$(nproc)" \
+            T3_LIB_DIR=../lib
+
+      - name: "Assert bench pattern WOULD find symbols when present"
+        run: |
+          set -euo pipefail
+          BIN=teleproto3/server/objs/bin/teleproxy
+          test -f "$BIN"
+          PATTERN='bench_handler|bench_session|bench_drain|bench_csprng|g_bench_'
+          set +e
+          static_hit="$(nm "$BIN" 2>/dev/null | grep -cE "$PATTERN")"
+          rcs=$?
+          dyn_hit="$(nm --dynamic "$BIN" 2>/dev/null | grep -cE "$PATTERN")"
+          rcd=$?
+          set -e
+          if [ "$rcs" -gt 1 ] || [ "$rcd" -gt 1 ]; then
+            echo "FAIL: grep -c errored (rcs=$rcs rcd=$rcd) — audit script unreliable"
+            exit 1
+          fi
+          total_hit=$((static_hit + dyn_hit))
+          if [ "$total_hit" -eq 0 ]; then
+            echo "FAIL: positive-control build with TELEPROTO3_BENCH=1 produced ZERO bench symbol matches — pattern is broken (typo or stale)"
+            exit 1
+          fi
+          echo "OK: positive-control found $total_hit bench symbol(s) — pattern is live"
+
+      # Story 1a-8 AC #5: SOURCE close-flush integration test runs in CI under
+      # TELEPROTO3_BENCH=1. Reuses the binary built above. Exit 77 (SKIP) is
+      # accepted as PASS to keep the workflow tolerant of environment gaps;
+      # CI on ubuntu-latest with all build deps installed should hit GREEN.
+      - name: "Install Python deps for bench integration test"
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet cryptography
+
+      - name: "Story 1a-8: SOURCE close-flush integration test"
+        run: |
+          set -euo pipefail
+          bash teleproto3/bench/tests/test_bench_source_close_flush.sh
+          rc=$?
+          if [ $rc -eq 0 ]; then
+            echo "OK: 1a-8 close-flush integration test PASSED"
+          elif [ $rc -eq 77 ]; then
+            echo "WARN: 1a-8 close-flush integration test SKIPPED (rc=77) — investigate"
+            exit 1   # CI builds the bench binary above, SKIP here is unexpected
+          else
+            echo "FAIL: 1a-8 close-flush integration test rc=$rc"
+            exit $rc
+          fi

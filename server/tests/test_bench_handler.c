@@ -1,16 +1,13 @@
 /*
- * test_bench_handler.c — red-phase acceptance tests for Story 1a-2 bench handler.
+ * test_bench_handler.c — green-phase acceptance tests for Story 1a-2 bench handler.
  *
- * TDD RED PHASE: will FAIL until bench-handler.c is implemented
- *
- * Not subject to banner-discipline (tests/, not src/).
  * Source: story 1a-2 AC#1–#6 (double gate, sub-mode dispatch, hot-path safety,
  *         runtime default OFF, stats counters).
  * Returns 0 on pass / 1 on fail.
  *
- * BUILD NOTE: Compile with -DTELEPROTO3_BENCH to enable the test body.
+ * BUILD: Compile with -DTELEPROTO3_BENCH to enable the test body.
  *   Without the flag the test prints SKIP and exits 0 (non-gating).
- *   Link against bench-handler.o (once implemented).
+ *   Link against bench-handler.o.
  */
 
 #include <stdio.h>
@@ -20,47 +17,7 @@
 
 #ifdef TELEPROTO3_BENCH
 
-/* ------------------------------------------------------------------ */
-/* Forward declarations — API surface expected from bench-handler.h   */
-/* These will be satisfied once bench-handler.c is implemented.       */
-/* ------------------------------------------------------------------ */
-
-/* Opaque upstream struct — we mock it locally for unit tests. */
-struct connection;
-
-/* Sub-mode constants (spec/wire-format.md §3.1, amendment W-003) */
-#define BENCH_MODE_SINK   0x01
-#define BENCH_MODE_ECHO   0x02
-#define BENCH_MODE_SOURCE 0x03
-
-/* State per connection */
-typedef struct {
-    uint8_t   mode;             /* 0x01=SINK, 0x02=ECHO, 0x03=SOURCE */
-    uint64_t  bytes_processed;
-    uint32_t  source_remaining;
-} bench_handler_state_t;
-
-/* Init: called from dispatcher when command_type==0x04 */
-extern int bench_handler_init(struct connection *c);
-
-/* Recv callback: parse mode byte on first call, dispatch by mode.
- * Returns: 0 on success, negative on error.
- * For ECHO: writes echoed bytes into the connection's output buffer.
- * For SOURCE: writes N random bytes into the connection's output buffer.
- * For errors: returns -1003 to signal WS close 1003. */
-extern int bench_handler_recv(struct connection *c, void *data, int len);
-
-/* Stats */
-typedef struct {
-    uint64_t sink_bytes;
-    uint64_t echo_bytes;
-    uint64_t source_bytes;
-} bench_stats_t;
-
-extern bench_stats_t bench_handler_get_stats(void);
-
-/* Runtime gate — default 0 (OFF). Set to 1 by --enable-bench-handler. */
-extern int g_bench_handler_enabled;
+#include "net/bench-handler.h"
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -96,34 +53,8 @@ static int g_failures = 0;
     } \
 } while (0)
 
-/* ------------------------------------------------------------------ */
-/* Mock connection                                                     */
-/*                                                                     */
-/* We cannot include the real upstream struct connection until the      */
-/* subtree is fully wired (Story 1.8 Task 0). Instead we allocate a   */
-/* block large enough to hold the bench_handler_state_t at the offset  */
-/* the implementation will use, plus a simple output capture buffer.   */
-/*                                                                     */
-/* The bench handler is expected to use:                               */
-/*   c->bench_state  (bench_handler_state_t)                           */
-/*   c->out_buf / c->out_len for echo/source output                   */
-/*                                                                     */
-/* We define a minimal mock that provides these fields.                */
-/* ------------------------------------------------------------------ */
-
-#define MOCK_OUT_CAP 4096
-
-struct connection {
-    bench_handler_state_t bench_state;
-    uint8_t  out_buf[MOCK_OUT_CAP];
-    int      out_len;
-    /* Padding to survive if real struct is larger — we only pass
-     * pointers to bench_handler_* which should only touch the above. */
-    uint8_t  _pad[512];
-};
-
-static struct connection *make_mock_conn(void) {
-    struct connection *c = calloc(1, sizeof(*c));
+static bench_conn_t *make_conn(void) {
+    bench_conn_t *c = calloc(1, sizeof(*c));
     if (!c) { perror("calloc"); exit(1); }
     return c;
 }
@@ -131,66 +62,56 @@ static struct connection *make_mock_conn(void) {
 /* ------------------------------------------------------------------ */
 /* Test 1: AC#1 — double gate dispatch (both ON → init succeeds)      */
 /* ------------------------------------------------------------------ */
-static int test_dispatch_double_gate_on(void) {
-    g_bench_handler_enabled = 1;  /* runtime gate ON */
-    struct connection *c = make_mock_conn();
-
+static void test_dispatch_double_gate_on(void) {
+    g_bench_handler_enabled = 1;
+    bench_conn_t *c = make_conn();
     int rc = bench_handler_init(c);
     EXPECT_EQ("1a2-UNIT-001: double gate ON -> init returns 0", rc, 0);
-
     free(c);
-    return 0;
 }
 
 /* ------------------------------------------------------------------ */
 /* Test 2: AC#1/AC#5 — runtime gate OFF → init rejected               */
 /* ------------------------------------------------------------------ */
-static int test_dispatch_runtime_gate_off(void) {
-    g_bench_handler_enabled = 0;  /* runtime gate OFF */
-    struct connection *c = make_mock_conn();
-
+static void test_dispatch_runtime_gate_off(void) {
+    g_bench_handler_enabled = 0;
+    bench_conn_t *c = make_conn();
     int rc = bench_handler_init(c);
     EXPECT_EQ("1a2-UNIT-002: runtime gate OFF -> init returns -1", rc, -1);
-
     free(c);
-    return 0;
 }
 
 /* ------------------------------------------------------------------ */
 /* Test 3: AC#2 — sub-mode SINK (0x01): read+discard, no response     */
 /* ------------------------------------------------------------------ */
-static int test_submode_sink(void) {
+static void test_submode_sink(void) {
     g_bench_handler_enabled = 1;
-    struct connection *c = make_mock_conn();
+    bench_conn_t *c = make_conn();
     bench_handler_init(c);
 
-    /* First byte = mode, followed by 32 bytes of payload. */
     uint8_t payload[33];
     payload[0] = BENCH_MODE_SINK;
     memset(payload + 1, 0xAB, 32);
 
     int rc = bench_handler_recv(c, payload, sizeof(payload));
-    EXPECT_EQ("1a2-UNIT-003a: sink recv returns 0", rc, 0);
-    /* Sink produces no output. */
+    EXPECT_EQ("1a2-UNIT-003a: sink recv returns 32 (consumed)", rc, 32);
     EXPECT_EQ("1a2-UNIT-003b: sink produces no output", c->out_len, 0);
 
     free(c);
-    return 0;
 }
 
 /* ------------------------------------------------------------------ */
 /* Test 4: AC#2 — sub-mode ECHO (0x02): echoes bytes back identically */
 /* ------------------------------------------------------------------ */
-static int test_submode_echo(void) {
+static void test_submode_echo(void) {
     g_bench_handler_enabled = 1;
-    struct connection *c = make_mock_conn();
+    bench_conn_t *c = make_conn();
     bench_handler_init(c);
 
-    /* First byte = mode, followed by 16 bytes of known data. */
     uint8_t payload[17];
     payload[0] = BENCH_MODE_ECHO;
     for (int i = 0; i < 16; i++) {
-        payload[1 + i] = (uint8_t)(i * 7 + 3);  /* deterministic pattern */
+        payload[1 + i] = (uint8_t)(i * 7 + 3);
     }
 
     int rc = bench_handler_recv(c, payload, sizeof(payload));
@@ -200,30 +121,30 @@ static int test_submode_echo(void) {
                   c->out_buf, payload + 1, 16);
 
     free(c);
-    return 0;
 }
 
 /* ------------------------------------------------------------------ */
 /* Test 5: AC#2 — sub-mode SOURCE (0x03): reads 4-byte LE length N,   */
-/*          emits N random bytes                                       */
+/*          emits N CSPRNG bytes                                       */
 /* ------------------------------------------------------------------ */
-static int test_submode_source(void) {
+static void test_submode_source(void) {
     g_bench_handler_enabled = 1;
-    struct connection *c = make_mock_conn();
+    bench_conn_t *c = make_conn();
     bench_handler_init(c);
 
-    /* First byte = mode, then 4-byte LE length = 256. */
     uint8_t payload[5];
     payload[0] = BENCH_MODE_SOURCE;
     uint32_t requested = 256;
-    memcpy(payload + 1, &requested, 4);  /* LE on LE host (Linux-only) */
+    payload[1] = (uint8_t)(requested & 0xff);
+    payload[2] = (uint8_t)((requested >> 8) & 0xff);
+    payload[3] = (uint8_t)((requested >> 16) & 0xff);
+    payload[4] = (uint8_t)((requested >> 24) & 0xff);
 
     int rc = bench_handler_recv(c, payload, sizeof(payload));
-    EXPECT_EQ("1a2-UNIT-005a: source recv returns 256", rc, 256);
+    /* C5: SOURCE completes in one call → BENCH_RC_SOURCE_DONE, not the byte count */
+    EXPECT_EQ("1a2-UNIT-005a: source recv returns BENCH_RC_SOURCE_DONE", rc, BENCH_RC_SOURCE_DONE);
     EXPECT_EQ("1a2-UNIT-005b: source output length is 256", c->out_len, 256);
 
-    /* We can't predict the random content, but we can verify it's not
-     * all zeros (extremely unlikely for 256 random bytes). */
     int all_zero = 1;
     for (int i = 0; i < 256 && all_zero; i++) {
         if (c->out_buf[i] != 0) all_zero = 0;
@@ -231,39 +152,37 @@ static int test_submode_source(void) {
     EXPECT_EQ("1a2-UNIT-005c: source output not all zeros", all_zero, 0);
 
     free(c);
-    return 0;
 }
 
 /* ------------------------------------------------------------------ */
 /* Test 6: AC#2 — invalid sub-mode (0xFF) → WS close 1003             */
 /* ------------------------------------------------------------------ */
-static int test_submode_invalid(void) {
+static void test_submode_invalid(void) {
     g_bench_handler_enabled = 1;
-    struct connection *c = make_mock_conn();
+    bench_conn_t *c = make_conn();
     bench_handler_init(c);
 
     uint8_t payload[2];
-    payload[0] = 0xFF;  /* invalid sub-mode */
-    payload[1] = 0x00;  /* dummy byte */
+    payload[0] = 0xFF;
+    payload[1] = 0x00;
 
     int rc = bench_handler_recv(c, payload, sizeof(payload));
-    /* -1003 signals the caller to issue WS close with status 1003
-     * ("Unsupported Data" per RFC 6455 §7.4.1). */
     EXPECT_EQ("1a2-UNIT-006: invalid mode 0xFF -> returns -1003", rc, -1003);
 
     free(c);
-    return 0;
 }
 
 /* ------------------------------------------------------------------ */
 /* Test 7: AC#6 — stats counters reflect correct byte counts           */
 /* ------------------------------------------------------------------ */
-static int test_stats_counters(void) {
+static void test_stats_counters(void) {
     g_bench_handler_enabled = 1;
 
-    /* --- SINK: 32 bytes --- */
+    bench_stats_t before = bench_handler_get_stats();
+
+    /* SINK: 32 bytes */
     {
-        struct connection *c = make_mock_conn();
+        bench_conn_t *c = make_conn();
         bench_handler_init(c);
         uint8_t payload[33];
         payload[0] = BENCH_MODE_SINK;
@@ -272,9 +191,9 @@ static int test_stats_counters(void) {
         free(c);
     }
 
-    /* --- ECHO: 20 bytes --- */
+    /* ECHO: 20 bytes */
     {
-        struct connection *c = make_mock_conn();
+        bench_conn_t *c = make_conn();
         bench_handler_init(c);
         uint8_t payload[21];
         payload[0] = BENCH_MODE_ECHO;
@@ -283,79 +202,47 @@ static int test_stats_counters(void) {
         free(c);
     }
 
-    /* --- SOURCE: 64 bytes --- */
+    /* SOURCE: 64 bytes */
     {
-        struct connection *c = make_mock_conn();
+        bench_conn_t *c = make_conn();
         bench_handler_init(c);
         uint8_t payload[5];
         payload[0] = BENCH_MODE_SOURCE;
         uint32_t req = 64;
-        memcpy(payload + 1, &req, 4);
+        payload[1] = (uint8_t)(req & 0xff);
+        payload[2] = (uint8_t)((req >> 8) & 0xff);
+        payload[3] = (uint8_t)((req >> 16) & 0xff);
+        payload[4] = (uint8_t)((req >> 24) & 0xff);
         bench_handler_recv(c, payload, sizeof(payload));
         free(c);
     }
 
-    bench_stats_t stats = bench_handler_get_stats();
+    bench_stats_t after = bench_handler_get_stats();
 
-    /* Note: these assertions assume the stats counters started from zero
-     * at the top of this test process. If previous tests already bumped
-     * counters, these values reflect cumulative totals. We check >=
-     * the expected minimum from this test's operations. For a clean
-     * test run where tests execute sequentially in a single process,
-     * the expected values include bytes from earlier test functions too.
-     *
-     * Minimum bytes contributed by THIS function:
-     *   sink:   32
-     *   echo:   20
-     *   source: 64
-     *
-     * Bytes from earlier tests (test_submode_sink, echo, source):
-     *   sink:   32 (test 3)
-     *   echo:   16 (test 4)
-     *   source: 256 (test 5)
-     *
-     * Total expected:
-     *   sink:   64
-     *   echo:   36
-     *   source: 320
-     */
-    int sink_ok   = (stats.sink_bytes   >= 64);
-    int echo_ok   = (stats.echo_bytes   >= 36);
-    int source_ok = (stats.source_bytes >= 320);
-
-    EXPECT_EQ("1a2-UNIT-007a: sink_bytes >= 64",   sink_ok,   1);
-    EXPECT_EQ("1a2-UNIT-007b: echo_bytes >= 36",   echo_ok,   1);
-    EXPECT_EQ("1a2-UNIT-007c: source_bytes >= 320", source_ok, 1);
-
-    return 0;
+    EXPECT_EQ_U64("1a2-UNIT-007a: sink_bytes delta == 32",
+                  after.sink_bytes   - before.sink_bytes,   32);
+    EXPECT_EQ_U64("1a2-UNIT-007b: echo_bytes delta == 20",
+                  after.echo_bytes   - before.echo_bytes,   20);
+    EXPECT_EQ_U64("1a2-UNIT-007c: source_bytes delta == 64",
+                  after.source_bytes - before.source_bytes, 64);
 }
 
 /* ------------------------------------------------------------------ */
-/* Test 8: AC#6 — stats zero when handler disabled                     */
-/*                                                                     */
-/* When the runtime gate is OFF, no operations should succeed, so      */
-/* no bytes should be counted. We test by disabling the handler,       */
-/* attempting operations, and checking that stats did not grow.        */
+/* Test 8: AC#6 — stats stay flat when handler disabled                */
 /* ------------------------------------------------------------------ */
-static int test_stats_zero_when_disabled(void) {
-    /* Snapshot current stats (from prior tests). */
+static void test_stats_zero_when_disabled(void) {
     bench_stats_t before = bench_handler_get_stats();
 
-    g_bench_handler_enabled = 0;  /* runtime gate OFF */
+    g_bench_handler_enabled = 0;
 
-    /* Attempt init — should fail. */
-    struct connection *c = make_mock_conn();
+    bench_conn_t *c = make_conn();
     int rc = bench_handler_init(c);
     EXPECT_EQ("1a2-UNIT-008a: init rejected when disabled", rc, -1);
 
-    /* Attempt recv anyway — should also fail / be a no-op. */
     uint8_t payload[17];
     payload[0] = BENCH_MODE_ECHO;
     memset(payload + 1, 0xEE, 16);
     rc = bench_handler_recv(c, payload, sizeof(payload));
-    /* Handler should reject if init was never successful.
-     * Exact error code is implementation-defined; we just check
-     * it's not a success (0 or positive). */
     if (rc >= 0) {
         fprintf(stderr, "FAIL [1a2-UNIT-008b]: recv should fail when disabled, got %d\n", rc);
         g_failures++;
@@ -373,14 +260,122 @@ static int test_stats_zero_when_disabled(void) {
                   after.source_bytes, before.source_bytes);
 
     free(c);
-    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 9: SOURCE — 4-byte length split across two recv calls          */
+/* Exercises the back-pressure / partial-input handling (AC #3).       */
+/* ------------------------------------------------------------------ */
+static void test_source_split_length(void) {
+    g_bench_handler_enabled = 1;
+    bench_conn_t *c = make_conn();
+    bench_handler_init(c);
+
+    uint8_t first[3];
+    first[0] = BENCH_MODE_SOURCE;
+    first[1] = 0x80;  /* length LE: 128 */
+    first[2] = 0x00;
+    int rc = bench_handler_recv(c, first, sizeof(first));
+    EXPECT_EQ("1a2-UNIT-009a: partial length returns 0 (waiting)", rc, 0);
+    EXPECT_EQ("1a2-UNIT-009b: no output before length complete", c->out_len, 0);
+
+    uint8_t rest[2];
+    rest[0] = 0x00;
+    rest[1] = 0x00;
+    rc = bench_handler_recv(c, rest, sizeof(rest));
+    /* C5: SOURCE completes in this call → BENCH_RC_SOURCE_DONE */
+    EXPECT_EQ("1a2-UNIT-009c: rest of length -> BENCH_RC_SOURCE_DONE", rc, BENCH_RC_SOURCE_DONE);
+    EXPECT_EQ("1a2-UNIT-009d: source output length is 128", c->out_len, 128);
+
+    free(c);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 10: C6 — SOURCE continuation with len=0 when N > BENCH_OUT_CAP */
+/* Verifies that calling bench_handler_recv(c, NULL, 0) continues       */
+/* emitting when source_remaining > 0 after an initial partial emit.   */
+/* ------------------------------------------------------------------ */
+static void test_source_continuation(void) {
+    g_bench_handler_enabled = 1;
+    bench_conn_t *c = make_conn();
+    bench_handler_init(c);
+
+    /* Request N = 2 * BENCH_OUT_CAP = 8192 bytes. */
+    uint32_t requested = BENCH_OUT_CAP * 2;
+    uint8_t payload[5];
+    payload[0] = BENCH_MODE_SOURCE;
+    payload[1] = (uint8_t)(requested & 0xff);
+    payload[2] = (uint8_t)((requested >> 8) & 0xff);
+    payload[3] = (uint8_t)((requested >> 16) & 0xff);
+    payload[4] = (uint8_t)((requested >> 24) & 0xff);
+
+    /* First call: emits BENCH_OUT_CAP bytes, source_remaining = BENCH_OUT_CAP.
+     * Returns bytes_emitted (BENCH_OUT_CAP), NOT BENCH_RC_SOURCE_DONE. */
+    int rc = bench_handler_recv(c, payload, sizeof(payload));
+    EXPECT_EQ("1a2-UNIT-010a: first partial emit returns BENCH_OUT_CAP", rc, BENCH_OUT_CAP);
+    EXPECT_EQ("1a2-UNIT-010b: out_len == BENCH_OUT_CAP after first emit",
+              c->out_len, BENCH_OUT_CAP);
+
+    /* Simulate drain: reset out_len (drain loop flushes out_buf between calls). */
+    c->out_len = 0;
+
+    /* Continuation call with len=0: emits remaining BENCH_OUT_CAP bytes. */
+    rc = bench_handler_recv(c, NULL, 0);
+    EXPECT_EQ("1a2-UNIT-010c: continuation call returns BENCH_RC_SOURCE_DONE", rc, BENCH_RC_SOURCE_DONE);
+    EXPECT_EQ("1a2-UNIT-010d: out_len == BENCH_OUT_CAP after continuation",
+              c->out_len, BENCH_OUT_CAP);
+
+    free(c);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 11 (P1 R2): SOURCE N=0 boundary — must close immediately       */
+/* with BENCH_RC_SOURCE_DONE rather than leaving a zombie session.    */
+/* ------------------------------------------------------------------ */
+static void test_source_zero_length(void) {
+    g_bench_handler_enabled = 1;
+    bench_conn_t *c = make_conn();
+    bench_handler_init(c);
+
+    /* SOURCE with N=0 (4 zero bytes after the mode byte). */
+    uint8_t payload[5] = { BENCH_MODE_SOURCE, 0x00, 0x00, 0x00, 0x00 };
+    int rc = bench_handler_recv(c, payload, sizeof(payload));
+    EXPECT_EQ("1a2-UNIT-011a: SOURCE N=0 -> BENCH_RC_SOURCE_DONE", rc, BENCH_RC_SOURCE_DONE);
+    EXPECT_EQ("1a2-UNIT-011b: SOURCE N=0 -> out_len == 0", c->out_len, 0);
+
+    free(c);
+}
+
+/* ------------------------------------------------------------------ */
+/* Test 12 (P12 R2 / D2): SOURCE N > BENCH_SOURCE_MAX must reject     */
+/* with -1003 before any CSPRNG emission. AC #3 hot-path safety.      */
+/* ------------------------------------------------------------------ */
+static void test_source_max_n_reject(void) {
+    g_bench_handler_enabled = 1;
+    bench_conn_t *c = make_conn();
+    bench_handler_init(c);
+
+    /* SOURCE with N = BENCH_SOURCE_MAX + 1 (just over the cap). */
+    uint32_t over = BENCH_SOURCE_MAX + 1u;
+    uint8_t payload[5];
+    payload[0] = BENCH_MODE_SOURCE;
+    payload[1] = (uint8_t)(over & 0xff);
+    payload[2] = (uint8_t)((over >> 8) & 0xff);
+    payload[3] = (uint8_t)((over >> 16) & 0xff);
+    payload[4] = (uint8_t)((over >> 24) & 0xff);
+
+    int rc = bench_handler_recv(c, payload, sizeof(payload));
+    EXPECT_EQ("1a2-UNIT-012a: SOURCE N>MAX -> -1003", rc, -1003);
+    EXPECT_EQ("1a2-UNIT-012b: SOURCE N>MAX -> no output emitted", c->out_len, 0);
+
+    free(c);
 }
 
 /* ------------------------------------------------------------------ */
 /* main                                                                */
 /* ------------------------------------------------------------------ */
 int main(void) {
-    printf("=== test_bench_handler: RED-PHASE acceptance scaffold (Story 1a-2) ===\n\n");
+    printf("=== test_bench_handler: Story 1a-2 acceptance tests ===\n\n");
 
     test_dispatch_double_gate_on();
     test_dispatch_runtime_gate_off();
@@ -390,6 +385,10 @@ int main(void) {
     test_submode_invalid();
     test_stats_counters();
     test_stats_zero_when_disabled();
+    test_source_split_length();
+    test_source_continuation();
+    test_source_zero_length();
+    test_source_max_n_reject();
 
     printf("\n");
     if (g_failures > 0) {
@@ -402,7 +401,6 @@ int main(void) {
 
 #else /* !TELEPROTO3_BENCH */
 
-/* Compile gate is OFF — test is non-gating. */
 int main(void) {
     printf("=== test_bench_handler: SKIP (TELEPROTO3_BENCH not defined) ===\n");
     return 0;

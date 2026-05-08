@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+### Added (DEV-ONLY, opt-in build)
+
+- **Type3 bench handler** (Story 1a-2). New `command_type=0x04`
+  (`T3_CMD_BENCH`) dispatch path for throughput measurement. Three sub-
+  modes after handshake: `0x01` SINK / `0x02` ECHO / `0x03` SOURCE.
+  Per-mode atomic counters exposed at the stats endpoint as
+  `teleproto3_bench_bytes_total{mode}`.
+- **Double gate** for safety: build flag `TELEPROTO3_BENCH=1` AND
+  runtime flag `--enable-bench-handler`. Default OFF on both axes.
+  Release builds compile out the entire bench TU and the
+  `bench-release-audit` CI workflow asserts no `bench_handler` symbols
+  in release artefacts (Story 1a-2 AC #4).
+- New module `src/net/bench-handler.{c,h}` (pure logic, unit-tested via
+  `tests/test_bench_handler.c`) and `src/net/bench-session.c` (per-
+  connection registry + WS-frame drain glue).
+- New CI workflow `.github/workflows/bench-release-audit.yml`.
+- New deployment doc `docs/bench-deploy.md` (sandbox topology, prod
+  isolation contract).
+
 ## [4.11.0]
 
 SOCKS5 upstream support in check command (#57), Cloudflare Spectrum docs (#55).
