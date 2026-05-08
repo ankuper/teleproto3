@@ -126,11 +126,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND T3_CSPRNG_BACKEND_RESOLVED STREQUAL "
     target_link_libraries(teleproto3 PUBLIC "-framework Security")
 endif()
 
+# Task 3 (Story 1-14): bcrypt.lib for BCryptGenRandom on Windows.
+if(WIN32 AND T3_CSPRNG_BACKEND_RESOLVED STREQUAL "windows")
+    target_link_libraries(teleproto3 PRIVATE bcrypt)
+endif()
+
 # -----------------------------------------------------------------------
 # Compiler flags
 # -----------------------------------------------------------------------
 if(MSVC)
-    target_compile_options(teleproto3 PRIVATE /W4 /WX)
+    target_compile_options(teleproto3 PRIVATE /W4 /WX /std:c11)
     # Ensure consumers can include t3.h without importing from a DLL.
     # Static archive only; dllimport/dllexport not needed.
     target_compile_definitions(teleproto3 PUBLIC T3_STATIC_LIB)
@@ -209,6 +214,22 @@ if(T3_BUILD_TESTS)
         add_test(NAME csprng_macos COMMAND test_csprng_macos)
     endif()
 
+    # CSPRNG statistical smoke test — Windows (Task 2, Story 1-14)
+    if(WIN32 AND T3_CSPRNG_BACKEND_RESOLVED STREQUAL "windows")
+        add_executable(test_csprng_windows
+            tests/csprng/test_csprng_windows.c
+        )
+        target_include_directories(test_csprng_windows PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
+        )
+        target_link_libraries(test_csprng_windows PRIVATE teleproto3)
+        if(MSVC)
+            target_compile_options(test_csprng_windows PRIVATE /W4 /WX /std:c11)
+        endif()
+        add_test(NAME csprng_windows COMMAND test_csprng_windows)
+    endif()
+
     # KDF vector reference runner (cross-platform; uses OpenSSL directly)
     add_executable(run_kdf_vectors
         tests/vectors/run_kdf_vectors.c
@@ -229,12 +250,16 @@ if(T3_BUILD_TESTS)
     set(_ref_hash "${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/linux-reference.sha256")
     set(_kat_file "${CMAKE_CURRENT_SOURCE_DIR}/../conformance/vectors/kdf-kat.txt")
     if(EXISTS "${_ref_hash}" AND EXISTS "${_kat_file}" AND
-       (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin"))
-        # Name the test by platform so both appear in ctest output.
+       (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+        CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR
+        CMAKE_SYSTEM_NAME STREQUAL "Windows"))
+        # Name the test by platform so all three appear in ctest output.
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             set(_kdf_test_name kdf_vectors_linux)
-        else()
+        elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
             set(_kdf_test_name kdf_vectors_macos)
+        else()
+            set(_kdf_test_name kdf_vectors_windows)
         endif()
         add_test(
             NAME ${_kdf_test_name}

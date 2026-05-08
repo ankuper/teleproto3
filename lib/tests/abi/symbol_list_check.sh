@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# symbol_list_check.sh — ABI guard for libteleproto3.a
+# symbol_list_check.sh — ABI guard for libteleproto3.a / teleproto3.lib
 #
-# Usage: symbol_list_check.sh <path/to/libteleproto3.a> <path/to/symbol_list.txt>
+# Usage: symbol_list_check.sh <path/to/archive> <path/to/symbol_list.txt>
 #
 # Extracts globally-defined symbols from the archive, strips platform-specific
-# underscore prefixes (macOS Mach-O), sorts, and diffs against the committed
-# baseline. Exits non-zero if they differ.
+# decoration, sorts, and diffs against the committed baseline.  Exits non-zero
+# if they differ.
 #
-# Called by CMake's abi_check target (Linux CI) and may be run locally on macOS.
+# Platform dispatch:
+#   Linux / macOS  — nm --extern-only --defined-only
+#   Windows        — dumpbin //SYMBOLS (requires MSVC in PATH; use
+#                    "Developer Command Prompt" or add VS to PATH in CI)
+#
+# Note (x64 MSVC): extern "C" / C-linkage symbols carry NO underscore prefix
+# on x64 Windows, so symbol names match ELF nm output exactly.  The script
+# just needs to handle the different line layout from dumpbin vs nm.
+#
+# Called by CI (lib-portability.yml) after a successful build.
 
 set -euo pipefail
 
@@ -27,7 +36,9 @@ fi
 TMPFILE=$(mktemp)
 trap 'rm -f "$TMPFILE"' EXIT
 
-case "$(uname -s)" in
+_uname=$(uname -s 2>/dev/null || echo "Windows")
+
+case "$_uname" in
     Darwin)
         # Apple/Homebrew nm prints "<archive-member>.o:" header lines and
         # blank lines between members. Filter to "address type name"
@@ -46,8 +57,57 @@ case "$(uname -s)" in
             | awk '$2 ~ /^[TDRBSWV]$/ {print $3}' \
             | LC_ALL=C sort -u > "$TMPFILE"
         ;;
+    MINGW*|MSYS*|CYGWIN*|Windows*)
+        # dumpbin //SYMBOLS output (abridged):
+        #   00C SECT2  notype       External     | t3_secret_parse (int __cdecl ...)
+        #   009 UNDEF  notype       External     | _BCryptGenRandom
+        #
+        # Strategy: match lines containing "External" followed by "|",
+        # REJECT lines whose section column is "UNDEF" (those are external
+        # references, not external definitions — analogous to nm's
+        # --defined-only filter on Linux/macOS), extract the symbol name
+        # (first token after "|"), filter to symbols starting with "t3_"
+        # to exclude OpenSSL/CRT internals, then sort-unique.
+        #
+        # POSIX awk used (no \b word-boundary — gawk-only extension);
+        # whitespace anchors keep matches portable across awk variants.
+        #
+        # The double-slash on //SYMBOLS prevents Git Bash from rewriting
+        # the flag as a Windows path (C:/SYMBOLS).
+        if ! command -v dumpbin >/dev/null 2>&1; then
+            echo "ERROR: dumpbin not found in PATH." >&2
+            echo "       Run this script from a Visual Studio Developer Command Prompt," >&2
+            echo "       or add the MSVC bin directory to PATH before invoking." >&2
+            exit 1
+        fi
+        # Capture dumpbin output once; we want both stdout and a stderr surface
+        # if it produces zero hits (so we can guard against silent path-mangling
+        # / wrong-archive failures rather than passing vacuously).
+        DUMPBIN_OUT=$(dumpbin //SYMBOLS "$ARCHIVE")
+        printf '%s\n' "$DUMPBIN_OUT" \
+            | awk '/[[:space:]]External[[:space:]]/ && /\|/ && $0 !~ /[[:space:]]UNDEF[[:space:]]/ {
+                # Split on "|" and take the token immediately after it.
+                idx = index($0, "|")
+                rest = substr($0, idx + 1)
+                # Strip leading whitespace and grab the first token (symbol name).
+                sub(/^[[:space:]]+/, "", rest)
+                sym = rest
+                sub(/[[:space:]].*/, "", sym)
+                # Only keep t3_* symbols (our ABI; OpenSSL / CRT symbols are noise).
+                if (sym ~ /^t3_/) print sym
+              }' \
+            | LC_ALL=C sort -u > "$TMPFILE"
+        if [ ! -s "$TMPFILE" ]; then
+            echo "ERROR: dumpbin produced zero defined t3_* symbols." >&2
+            echo "       Likely cause: wrong archive path, MSYS path mangling on //SYMBOLS," >&2
+            echo "       awk variant without [[:space:]] support, or build linked nothing." >&2
+            echo "       First 50 lines of dumpbin output for diagnosis:" >&2
+            printf '%s\n' "$DUMPBIN_OUT" | head -50 >&2
+            exit 1
+        fi
+        ;;
     *)
-        echo "ERROR: unsupported platform for ABI check: $(uname -s)" >&2
+        echo "ERROR: unsupported platform for ABI check: $_uname" >&2
         exit 1
         ;;
 esac
@@ -62,12 +122,19 @@ if diff -u "$BASELINE" "$TMPFILE"; then
 else
     echo ""
     echo "ABI symbol check FAILED — diff above shows baseline vs. current archive."
-    echo "If the ABI change is intentional, regenerate the baseline directly from"
-    echo "the archive (NOT via this script — its mismatch output is not a symbol list):"
-    echo "  nm --extern-only --defined-only <archive> \\"
-    echo "    | awk '\$2 ~ /^[TDRBSWV]\$/ {print \$3}' \\"
-    echo "    | LC_ALL=C sort -u > tests/abi/symbol_list.txt"
+    echo "If the ABI change is intentional, regenerate the baseline:"
+    echo ""
+    echo "  Linux / macOS:"
+    echo "    nm --extern-only --defined-only <archive> \\"
+    echo "      | awk '\$2 ~ /^[TDRBSWV]\$/ {print \$3}' \\"
+    echo "      | LC_ALL=C sort -u > tests/abi/symbol_list.txt"
     echo "  # On macOS, also pipe through 'sed s/^_//' before sort to strip Mach-O underscore."
-    echo "  # then review and commit tests/abi/symbol_list.txt"
+    echo ""
+    echo "  Windows (from Developer Command Prompt):"
+    echo "    dumpbin //SYMBOLS <archive.lib> \\"
+    echo "      | awk '/[[:space:]]External[[:space:]]/ && /\\|/ && \$0 !~ /[[:space:]]UNDEF[[:space:]]/ {idx=index(\$0,\"|\"); rest=substr(\$0,idx+1); sub(/^[[:space:]]+/,\"\",rest); sym=rest; sub(/[[:space:]].*/,\"\",sym); if(sym~/^t3_/) print sym}' \\"
+    echo "      | LC_ALL=C sort -u > tests/abi/symbol_list.txt"
+    echo ""
+    echo "  Then review and commit tests/abi/symbol_list.txt."
     exit 1
 fi
