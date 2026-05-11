@@ -34,6 +34,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
@@ -440,6 +441,11 @@ struct t3_shim {
     uint16_t server_port;
     char     ws_path[512];
     uint8_t  secret_key[16];
+    /* D6: auto-generated SOCKS5 USER/PASS that gate the loopback listener.
+     * 32 lower-case hex digits each + NUL. Generated once at t3_shim_open
+     * and never rotated. NOT to be logged or persisted. */
+    char     user[T3_SHIM_CRED_BUFLEN];
+    char     pass[T3_SHIM_CRED_BUFLEN];
     SSL_CTX *ssl_ctx;
     pthread_t       accept_thread;
     atomic_bool     stopping;
@@ -460,22 +466,56 @@ static void *tunnel_thread(void *arg) {
 
     uint8_t buf[512];
 
-    /* --- SOCKS5 greeting from tgcalls --- */
+    /* --- SOCKS5 greeting from tgcalls (D6: require USERNAME/PASSWORD) --- */
     if (read_exact(cfd, buf, 2) < 0 || buf[0] != 0x05) goto done;
     uint8_t nmeth = buf[1];
     if (nmeth > 0 && read_exact(cfd, buf, nmeth) < 0) goto done;
-    /* Verify NO-AUTH (0x00) is in the offered method list */
-    int has_no_auth = 0;
+    /* D6: require RFC 1929 USERNAME/PASSWORD (method 0x02). NO-AUTH (0x00) is
+     * deliberately refused — without it, any other process on the local
+     * machine could connect to the loopback listener and tunnel arbitrary
+     * traffic through our Type3 channel. */
+    int has_userpass = 0;
     for (uint8_t i = 0; i < nmeth; i++) {
-        if (buf[i] == 0x00) { has_no_auth = 1; break; }
+        if (buf[i] == 0x02) { has_userpass = 1; break; }
     }
-    if (!has_no_auth) {
+    if (!has_userpass) {
         uint8_t no_method[2] = {0x05, 0xFF};
         send(cfd, no_method, 2, 0);
         goto done;
     }
-    uint8_t nauth[2] = {0x05, 0x00};
-    send(cfd, nauth, 2, 0);
+    {
+        uint8_t method_reply[2] = {0x05, 0x02};
+        send(cfd, method_reply, 2, 0);
+    }
+
+    /* RFC 1929 sub-negotiation: 0x01 ULEN [UNAME] PLEN [PASSWD]
+     * We require ULEN == PLEN == T3_SHIM_CRED_LEN (32 hex chars). */
+    {
+        uint8_t auth_hdr[2];
+        if (read_exact(cfd, auth_hdr, 2) < 0) goto done;
+        if (auth_hdr[0] != 0x01) goto done;  /* unsupported sub-version */
+        int ulen = auth_hdr[1];
+        if (ulen < 1 || ulen > 255) goto done;
+        uint8_t user_recv[256];
+        if (read_exact(cfd, user_recv, ulen) < 0) goto done;
+
+        uint8_t plen_byte;
+        if (read_exact(cfd, &plen_byte, 1) < 0) goto done;
+        int plen = plen_byte;
+        if (plen < 1 || plen > 255) goto done;
+        uint8_t pass_recv[256];
+        if (read_exact(cfd, pass_recv, plen) < 0) goto done;
+
+        /* Constant-time compare. CRYPTO_memcmp returns 0 on equality. */
+        int user_ok = (ulen == T3_SHIM_CRED_LEN)
+            && (CRYPTO_memcmp(user_recv, sh->user, T3_SHIM_CRED_LEN) == 0);
+        int pass_ok = (plen == T3_SHIM_CRED_LEN)
+            && (CRYPTO_memcmp(pass_recv, sh->pass, T3_SHIM_CRED_LEN) == 0);
+
+        uint8_t auth_reply[2] = { 0x01, (user_ok && pass_ok) ? 0x00 : 0xFF };
+        send(cfd, auth_reply, 2, 0);
+        if (!user_ok || !pass_ok) goto done;
+    }
 
     /* --- SOCKS5 CONNECT request --- */
     if (read_exact(cfd, buf, 4) < 0) goto done;
@@ -649,6 +689,25 @@ T3_API t3_result_t t3_shim_open(
     strncpy(sh->ws_path, ws_path, 511);
     memcpy(sh->secret_key, sk, 16);
 
+    /* D6: auto-generate per-shim SOCKS5 USER/PASS (16 random bytes each,
+     * hex-encoded to 32 chars). RAND_bytes failure -> abort open. */
+    {
+        uint8_t user_raw[16], pass_raw[16];
+        if (RAND_bytes(user_raw, 16) != 1 || RAND_bytes(pass_raw, 16) != 1) {
+            free(sh);
+            return T3_ERR_INTERNAL;
+        }
+        static const char hexchars[] = "0123456789abcdef";
+        for (int i = 0; i < 16; i++) {
+            sh->user[i * 2]     = hexchars[user_raw[i] >> 4];
+            sh->user[i * 2 + 1] = hexchars[user_raw[i] & 0xF];
+            sh->pass[i * 2]     = hexchars[pass_raw[i] >> 4];
+            sh->pass[i * 2 + 1] = hexchars[pass_raw[i] & 0xF];
+        }
+        sh->user[T3_SHIM_CRED_LEN] = '\0';
+        sh->pass[T3_SHIM_CRED_LEN] = '\0';
+    }
+
     SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
     if (!ctx) { free(sh); return T3_ERR_INTERNAL; }  /* P2 */
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
@@ -707,6 +766,19 @@ T3_API void t3_shim_close(t3_shim_t *sh) {
 
 T3_API uint16_t t3_shim_local_port(const t3_shim_t *sh) {
     return sh ? sh->local_port : 0;
+}
+
+T3_API t3_result_t t3_shim_get_credentials(
+    const t3_shim_t *sh,
+    char *out_user, size_t user_len,
+    char *out_pass, size_t pass_len) {
+    if (!sh || !out_user || !out_pass) return T3_ERR_INVALID_ARG;
+    if (user_len < T3_SHIM_CRED_BUFLEN || pass_len < T3_SHIM_CRED_BUFLEN) {
+        return T3_ERR_INVALID_ARG;
+    }
+    memcpy(out_user, sh->user, T3_SHIM_CRED_BUFLEN);
+    memcpy(out_pass, sh->pass, T3_SHIM_CRED_BUFLEN);
+    return T3_OK;
 }
 
 T3_API void t3_shim_stats(const t3_shim_t *sh,

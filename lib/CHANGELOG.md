@@ -6,7 +6,22 @@ declares the `spec-vX.Y.Z` range it implements — see `VERSION`.
 
 ## [Unreleased]
 
-<!-- Future lib-v0.1.x patch entries go here. -->
+### Added
+- `t3_shim_get_credentials()` — retrieve the auto-generated SOCKS5
+  USERNAME/PASSWORD that the shim now enforces on its loopback listener
+  (Story 9-1 D6). New constants `T3_SHIM_CRED_LEN` (32) and
+  `T3_SHIM_CRED_BUFLEN` (33) declared in `t3_shim_socks5.h`.
+
+### Changed
+- The shim's loopback SOCKS5 listener REQUIRES RFC 1929 USERNAME/PASSWORD
+  authentication (method 0x02). NO-AUTH (method 0x00) is no longer accepted.
+  Credentials are auto-generated per shim spawn; callers retrieve them via
+  `t3_shim_get_credentials()`. This is defense against other local processes
+  hijacking the loopback listener and tunneling traffic through Type3.
+
+### Stability note
+Additive C API only — `t3_shim_open` signature unchanged. ABI patch bump
+will be applied at the next release tag.
 
 ## [lib-v0.1.2] — 2026-05-10
 

@@ -5,7 +5,9 @@ Story 9-1 AC #2. Validates that the t3_shim_socks5 implementation:
   - Answers well-formed REP errors for every error path
   - Does NOT segfault, hang >5s, or use-after-free on malformed input
   - Rejects BIND / UDP-ASSOCIATE with REP=0x07
-  - Accepts NO-AUTH (method 0x00) only
+  - REQUIRES SOCKS5 USERNAME/PASSWORD (method 0x02) per RFC 1929 (D6);
+    NO-AUTH (0x00) is refused. Credentials are auto-generated per spawn
+    and read from the stub binary's stdout (`USER <hex>` / `PASS <hex>`).
 
 Test strategy
 -------------
@@ -74,17 +76,75 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _socks5_connect(shim_port: int, atyp: int, dst_addr: bytes, dst_port: int,
+class ShimInfo:
+    """Triple of (port, user, pass) describing a running shim."""
+    __slots__ = ("port", "user", "pass_")
+    def __init__(self, port: int, user: str, pass_: str) -> None:
+        self.port = port
+        self.user = user
+        self.pass_ = pass_
+
+
+def _socks5_authenticate(s: socket.socket, info: "ShimInfo") -> None:
+    """Perform RFC 1928 method-select + RFC 1929 USERNAME/PASSWORD sub-negotiation
+    against the shim. Raises AssertionError on protocol failure."""
+    # Method-select: offer USERNAME/PASSWORD (0x02).
+    s.sendall(bytes([0x05, 0x01, 0x02]))
+    method_reply = s.recv(2)
+    assert len(method_reply) == 2, f"truncated method reply: {method_reply!r}"
+    assert method_reply[0] == 0x05, f"bad VER in method reply: {method_reply!r}"
+    assert method_reply[1] == 0x02, (
+        f"shim refused USERNAME/PASSWORD (selected method {method_reply[1]:#x}); "
+        f"D6 requires 0x02"
+    )
+    # Sub-negotiation: 0x01 ULEN USER PLEN PASS
+    user_b = info.user.encode("ascii")
+    pass_b = info.pass_.encode("ascii")
+    assert len(user_b) <= 255 and len(pass_b) <= 255
+    s.sendall(bytes([0x01, len(user_b)]) + user_b
+              + bytes([len(pass_b)]) + pass_b)
+    auth_reply = s.recv(2)
+    assert len(auth_reply) == 2, f"truncated auth reply: {auth_reply!r}"
+    assert auth_reply[0] == 0x01, f"bad sub-version in auth reply: {auth_reply!r}"
+    assert auth_reply[1] == 0x00, f"shim rejected credentials: {auth_reply!r}"
+
+
+def _open_authenticated(info: "ShimInfo", timeout: float = 5.0) -> socket.socket:
+    """Open a TCP connection to the shim, complete USER/PASS auth, return socket
+    ready to send a SOCKS5 CONNECT request."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    s.connect(("127.0.0.1", info.port))
+    _socks5_authenticate(s, info)
+    return s
+
+
+def _socks5_connect(shim_info: "ShimInfo", atyp: int, dst_addr: bytes, dst_port: int,
                     extra_methods: list[int] | None = None) -> socket.socket:
     """Open a SOCKS5 connection to shim. Returns socket at the CONNECT-reply stage."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.settimeout(5.0)
-    s.connect(("127.0.0.1", shim_port))
-    methods = [0x00] + (extra_methods or [])
+    s.connect(("127.0.0.1", shim_info.port))
+    methods = [0x02] + (extra_methods or [])
     s.sendall(bytes([0x05, len(methods)] + methods))
     resp = s.recv(2)
     assert resp[0] == 0x05
+    if resp[1] == 0x02:
+        _socks5_authenticate_after_select(s, shim_info)
     return s
+
+
+def _socks5_authenticate_after_select(s: socket.socket, info: "ShimInfo") -> None:
+    """Send only the RFC 1929 sub-negotiation part, assuming method-select
+    already completed."""
+    user_b = info.user.encode("ascii")
+    pass_b = info.pass_.encode("ascii")
+    s.sendall(bytes([0x01, len(user_b)]) + user_b
+              + bytes([len(pass_b)]) + pass_b)
+    auth_reply = s.recv(2)
+    assert auth_reply[0] == 0x01 and auth_reply[1] == 0x00, (
+        f"sub-negotiation failed: {auth_reply!r}"
+    )
 
 
 def _send_connect(s: socket.socket, atyp: int, dst_addr: bytes, dst_port: int) -> bytes:
@@ -286,8 +346,8 @@ def mock_server(tls_creds):
 
 
 @pytest.fixture(scope="session")
-def shim_port(mock_server, tmp_path_factory):
-    """Start the shim stub subprocess pointing at the mock server. Returns shim port."""
+def shim(mock_server, tmp_path_factory):
+    """Start the shim stub subprocess and return a ShimInfo(port, user, pass)."""
     host, port, cert_path = mock_server
     shim_p = _free_port()
     env = os.environ.copy()
@@ -298,12 +358,32 @@ def shim_port(mock_server, tmp_path_factory):
     proc = subprocess.Popen(
         [_STUB_BIN],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # Wait for "READY\n" from stub binary
+    # Stub prints (in order): READY\n PORT <p>\n USER <hex>\n PASS <hex>\n
     ready = proc.stdout.readline().strip()
     assert ready == b"READY", f"stub did not print READY; got: {ready!r}"
-    yield shim_p
+    port_line = proc.stdout.readline().strip()
+    assert port_line.startswith(b"PORT "), f"missing PORT line: {port_line!r}"
+    user_line = proc.stdout.readline().strip()
+    assert user_line.startswith(b"USER "), f"missing USER line: {user_line!r}"
+    pass_line = proc.stdout.readline().strip()
+    assert pass_line.startswith(b"PASS "), f"missing PASS line: {pass_line!r}"
+    info = ShimInfo(
+        port=int(port_line[5:].decode("ascii")),
+        user=user_line[5:].decode("ascii"),
+        pass_=pass_line[5:].decode("ascii"),
+    )
+    # Sanity: port consistency with the env hint (when non-zero).
+    if shim_p != 0:
+        assert info.port == shim_p
+    yield info
     proc.terminate()
     proc.wait(timeout=5)
+
+
+@pytest.fixture(scope="session")
+def shim_port(shim):
+    """Backwards-compat alias: just the port number from the ShimInfo."""
+    return shim.port
 
 
 # ---------------------------------------------------------------------------
@@ -311,19 +391,81 @@ def shim_port(mock_server, tmp_path_factory):
 # ---------------------------------------------------------------------------
 
 class TestSocks5AuthNegotiation:
-    """RFC 1928 §3 auth-method negotiation."""
+    """RFC 1928 §3 auth-method negotiation + RFC 1929 USERNAME/PASSWORD (D6)."""
 
-    def test_no_auth_accepted(self, shim_port):
+    def test_no_auth_rejected(self, shim_port):
+        """D6: NO-AUTH (0x00) must be refused — any local process could
+        otherwise tunnel through the loopback listener."""
         s = socket.socket(); s.settimeout(5.0)
         s.connect(("127.0.0.1", shim_port))
         s.sendall(bytes([0x05, 0x01, 0x00]))  # only NO-AUTH
         resp = s.recv(2)
         assert resp[0] == 0x05
-        assert resp[1] == 0x00  # NO-AUTH accepted
+        assert resp[1] == 0xFF, f"NO-AUTH should be refused; got {resp[1]:#x}"
+        s.close()
+
+    def test_userpass_selected_when_offered_alone(self, shim):
+        """USER/PASS (0x02) alone → method-select reply 0x02."""
+        s = socket.socket(); s.settimeout(5.0)
+        s.connect(("127.0.0.1", shim.port))
+        s.sendall(bytes([0x05, 0x01, 0x02]))
+        resp = s.recv(2)
+        assert resp == bytes([0x05, 0x02])
+        s.close()
+
+    def test_userpass_correct_credentials_accepted(self, shim):
+        """USER/PASS sub-negotiation with the real creds → 0x01 0x00."""
+        s = _open_authenticated(shim)
+        s.close()
+
+    def test_userpass_wrong_password_rejected(self, shim):
+        """USER/PASS sub-negotiation with wrong password → 0x01 0xFF."""
+        s = socket.socket(); s.settimeout(5.0)
+        s.connect(("127.0.0.1", shim.port))
+        s.sendall(bytes([0x05, 0x01, 0x02]))
+        assert s.recv(2) == bytes([0x05, 0x02])
+        bad_pass = "0" * 32
+        user_b = shim.user.encode("ascii")
+        pass_b = bad_pass.encode("ascii")
+        s.sendall(bytes([0x01, len(user_b)]) + user_b
+                  + bytes([len(pass_b)]) + pass_b)
+        auth = s.recv(2)
+        assert auth[0] == 0x01 and auth[1] == 0xFF
+        s.close()
+
+    def test_userpass_wrong_username_rejected(self, shim):
+        s = socket.socket(); s.settimeout(5.0)
+        s.connect(("127.0.0.1", shim.port))
+        s.sendall(bytes([0x05, 0x01, 0x02]))
+        assert s.recv(2) == bytes([0x05, 0x02])
+        bad_user = "f" * 32
+        user_b = bad_user.encode("ascii")
+        pass_b = shim.pass_.encode("ascii")
+        s.sendall(bytes([0x01, len(user_b)]) + user_b
+                  + bytes([len(pass_b)]) + pass_b)
+        auth = s.recv(2)
+        assert auth[0] == 0x01 and auth[1] == 0xFF
+        s.close()
+
+    def test_userpass_wrong_length_rejected(self, shim):
+        """USERNAME of unexpected length (e.g. 16 chars instead of 32) → 0xFF."""
+        s = socket.socket(); s.settimeout(5.0)
+        s.connect(("127.0.0.1", shim.port))
+        s.sendall(bytes([0x05, 0x01, 0x02]))
+        assert s.recv(2) == bytes([0x05, 0x02])
+        user_b = b"deadbeefdeadbeef"  # 16 chars
+        pass_b = shim.pass_.encode("ascii")
+        s.sendall(bytes([0x01, len(user_b)]) + user_b
+                  + bytes([len(pass_b)]) + pass_b)
+        try:
+            auth = s.recv(2)
+            assert not auth or auth[1] == 0xFF
+        except (ConnectionResetError, TimeoutError):
+            pass  # clean close acceptable
         s.close()
 
     def test_gssapi_only_rejected(self, shim_port):
-        """GSSAPI-only list → server returns 0xFF (no acceptable method)."""
+        """GSSAPI-only list → 0xFF (no acceptable method)."""
         s = socket.socket(); s.settimeout(5.0)
         s.connect(("127.0.0.1", shim_port))
         s.sendall(bytes([0x05, 0x01, 0x01]))   # only GSSAPI
@@ -342,13 +484,13 @@ class TestSocks5AuthNegotiation:
         assert resp[1] == 0xFF
         s.close()
 
-    def test_mixed_list_accepts_no_auth(self, shim_port):
-        """List containing NO-AUTH alongside other methods → select NO-AUTH."""
+    def test_mixed_list_selects_userpass(self, shim_port):
+        """List containing USER/PASS alongside other methods → select 0x02."""
         s = socket.socket(); s.settimeout(5.0)
         s.connect(("127.0.0.1", shim_port))
-        s.sendall(bytes([0x05, 0x03, 0x01, 0x00, 0x80]))
+        s.sendall(bytes([0x05, 0x03, 0x01, 0x02, 0x80]))
         resp = s.recv(2)
-        assert resp[1] == 0x00
+        assert resp[1] == 0x02
         s.close()
 
     def test_empty_method_list_rejected(self, shim_port):
@@ -356,7 +498,6 @@ class TestSocks5AuthNegotiation:
         s = socket.socket(); s.settimeout(5.0)
         s.connect(("127.0.0.1", shim_port))
         s.sendall(bytes([0x05, 0x00]))  # nmethods=0
-        # Should close cleanly or send 0xFF within 5s
         try:
             resp = s.recv(2)
             assert not resp or resp[1] == 0xFF
@@ -368,24 +509,17 @@ class TestSocks5AuthNegotiation:
 class TestSocks5Commands:
     """RFC 1928 §4 command handling."""
 
-    def test_bind_returns_0x07(self, shim_port):
+    def test_bind_returns_0x07(self, shim):
         """CMD=BIND (0x02) → REP=0x07 (Command not supported)."""
-        s = socket.socket(); s.settimeout(5.0)
-        s.connect(("127.0.0.1", shim_port))
-        s.sendall(bytes([0x05, 0x01, 0x00]))  # NO-AUTH
-        assert s.recv(2)[1] == 0x00
-        # BIND command
+        s = _open_authenticated(shim)
         s.sendall(bytes([0x05, 0x02, 0x00, 0x01, 0, 0, 0, 0, 0, 80]))
         resp = s.recv(4)
         assert resp[1] == 0x07
         s.close()
 
-    def test_udp_associate_returns_0x07(self, shim_port):
+    def test_udp_associate_returns_0x07(self, shim):
         """CMD=UDP-ASSOCIATE (0x03) → REP=0x07."""
-        s = socket.socket(); s.settimeout(5.0)
-        s.connect(("127.0.0.1", shim_port))
-        s.sendall(bytes([0x05, 0x01, 0x00]))
-        assert s.recv(2)[1] == 0x00
+        s = _open_authenticated(shim)
         s.sendall(bytes([0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 80]))
         resp = s.recv(4)
         assert resp[1] == 0x07
@@ -396,12 +530,9 @@ class TestSocks5Commands:
         (0x04, b"\x00" * 15 + b"\x01"),     # IPv6 ::1
         (0x03, b"127.0.0.1"),               # domain
     ])
-    def test_connect_atyp_matrix(self, shim_port, atyp, addr):
+    def test_connect_atyp_matrix(self, shim, atyp, addr):
         """CONNECT with various ATYP values should NOT crash or hang."""
-        s = socket.socket(); s.settimeout(5.0)
-        s.connect(("127.0.0.1", shim_port))
-        s.sendall(bytes([0x05, 0x01, 0x00]))
-        assert s.recv(2)[1] == 0x00
+        s = _open_authenticated(shim)
         req = bytes([0x05, 0x01, 0x00, atyp])
         if atyp == 0x03:
             req += bytes([len(addr)]) + addr
@@ -409,7 +540,6 @@ class TestSocks5Commands:
             req += addr
         req += struct.pack(">H", 9999)
         s.sendall(req)
-        # Should receive a REP (success or error) within 5s, not hang
         try:
             resp = s.recv(4)
             assert len(resp) >= 4
@@ -422,13 +552,10 @@ class TestSocks5Commands:
 class TestSocks5EdgeCases:
     """Malformed / boundary input handling."""
 
-    def test_oversized_domain_255(self, shim_port):
+    def test_oversized_domain_255(self, shim):
         """255-byte domain (max allowed per RFC 1928 §4) — no hang."""
         domain = b"x" * 255
-        s = socket.socket(); s.settimeout(5.0)
-        s.connect(("127.0.0.1", shim_port))
-        s.sendall(bytes([0x05, 0x01, 0x00]))
-        assert s.recv(2)[1] == 0x00
+        s = _open_authenticated(shim)
         req = bytes([0x05, 0x01, 0x00, 0x03, 255]) + domain + struct.pack(">H", 80)
         s.sendall(req)
         try:
@@ -438,44 +565,36 @@ class TestSocks5EdgeCases:
             pass
         s.close()
 
-    def test_oversized_domain_256_rejected(self, shim_port):
+    def test_oversized_domain_256_rejected(self, shim):
         """256-byte domain (over RFC 1928 limit) — clean close within 5s."""
         # RFC 1928 encodes domain length as 1 byte (max 255), so 256 is impossible
-        # in a well-formed request. We force-overflow by sending length=0x00 (wraps)
-        # or just send length=255 followed by 256 bytes (truncated length field).
-        # Either way the shim must not hang or crash.
-        s = socket.socket(); s.settimeout(5.0)
-        s.connect(("127.0.0.1", shim_port))
-        s.sendall(bytes([0x05, 0x01, 0x00]))
-        assert s.recv(2)[1] == 0x00
-        # Craft request with len_byte=0xFF but send 256 payload bytes
+        # in a well-formed request. We force-overflow by sending length=0xFF and
+        # then 256 bytes. The shim must not hang or crash.
+        s = _open_authenticated(shim)
         req = bytes([0x05, 0x01, 0x00, 0x03, 0xFF]) + b"x" * 256 + struct.pack(">H", 80)
         s.sendall(req)
         try:
             resp = s.recv(4)
-            # If a response comes back, it must be well-formed
             assert resp[0] == 0x05
         except Exception:
             pass  # clean close acceptable
         s.close()
 
-    def test_partial_read_auth_method_byte_at_a_time(self, shim_port):
-        """Send auth negotiation 1 byte at a time — shim must assemble correctly."""
+    def test_partial_read_auth_method_byte_at_a_time(self, shim):
+        """Send method-select negotiation 1 byte at a time — shim must assemble correctly."""
         s = socket.socket(); s.settimeout(5.0)
-        s.connect(("127.0.0.1", shim_port))
-        for byte in [0x05, 0x01, 0x00]:
+        s.connect(("127.0.0.1", shim.port))
+        # D6: offer USER/PASS one byte at a time.
+        for byte in [0x05, 0x01, 0x02]:
             s.send(bytes([byte]))
             time.sleep(0.01)
         resp = s.recv(2)
-        assert resp[1] == 0x00  # NO-AUTH accepted
+        assert resp == bytes([0x05, 0x02])  # USER/PASS selected
         s.close()
 
-    def test_partial_read_connect_byte_at_a_time(self, shim_port):
+    def test_partial_read_connect_byte_at_a_time(self, shim):
         """Send CONNECT request 1 byte at a time — no hang >5s."""
-        s = socket.socket(); s.settimeout(5.0)
-        s.connect(("127.0.0.1", shim_port))
-        s.sendall(bytes([0x05, 0x01, 0x00]))
-        assert s.recv(2)[1] == 0x00
+        s = _open_authenticated(shim)
         req = bytes([0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x1F, 0x40])
         for byte in req:
             s.send(bytes([byte]))
@@ -499,11 +618,8 @@ class TestSocks5EdgeCases:
             pass  # clean close is the correct behaviour
         s.close()
 
-    def test_connection_close_after_auth_no_connect(self, shim_port):
+    def test_connection_close_after_auth_no_connect(self, shim):
         """Close connection after auth negotiation without sending CONNECT — no leak."""
-        s = socket.socket(); s.settimeout(5.0)
-        s.connect(("127.0.0.1", shim_port))
-        s.sendall(bytes([0x05, 0x01, 0x00]))
-        assert s.recv(2)[1] == 0x00
+        s = _open_authenticated(shim)
         s.close()  # close without sending CONNECT — shim must not hang
         time.sleep(0.5)  # give shim time to handle the close

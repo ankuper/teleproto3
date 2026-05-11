@@ -68,9 +68,24 @@ int main(void) {
         return 1;
     }
 
+    /* D6: expose the shim's auto-generated SOCKS5 USER/PASS so the test
+     * harness can authenticate against the loopback listener. NEVER do
+     * this in production — the stub is a test-only fixture. */
+    char user[T3_SHIM_CRED_BUFLEN] = {0};
+    char pass[T3_SHIM_CRED_BUFLEN] = {0};
+    if (t3_shim_get_credentials(shim, user, sizeof(user), pass, sizeof(pass)) != T3_OK) {
+        fprintf(stderr, "stub: t3_shim_get_credentials failed\n");
+        t3_shim_close(shim);
+        return 1;
+    }
+
     printf("READY\n");
     fflush(stdout);
     printf("PORT %u\n", (unsigned)t3_shim_local_port(shim));
+    fflush(stdout);
+    printf("USER %s\n", user);
+    fflush(stdout);
+    printf("PASS %s\n", pass);
     fflush(stdout);
 
     while (g_running) sleep(1);
