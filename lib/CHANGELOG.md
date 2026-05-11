@@ -8,6 +8,21 @@ declares the `spec-vX.Y.Z` range it implements — see `VERSION`.
 
 <!-- Future lib-v0.1.x patch entries go here. -->
 
+## [lib-v0.1.2] — 2026-05-10
+
+### Added
+- Optional SOCKS5/CONNECT shim (`t3_shim_*` API). Build-flag-gated by
+  `T3_SHIM_SOCKS5=ON` in CMake. Used by Epic 9 calls integration (Story 9-1).
+  Public surface: `t3_shim_open()`, `t3_shim_close()`, `t3_shim_local_port()`,
+  `t3_shim_stats()` — declared in `lib/include/t3_shim_socks5.h`.
+  Consumers guard calls with `T3_SHIM_SOCKS5_AVAILABLE` from `t3_features.h`.
+- `lib/include/t3_features.h` — compile-time feature availability flags header.
+
+### Stability note
+ABI additive patch — no existing function, field layout, or enumerant changed.
+`T3_ABI_VERSION_PATCH` bumped `1 → 2`. Consumer pins updated:
+`tdesktop/.../teleproto3_bridge.cpp` and `tdesktop/.../ui/proxy_indicator_c1.cpp`.
+
 ## [lib-v0.1.1] — 2026-05-06
 
 ### Added

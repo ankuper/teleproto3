@@ -57,11 +57,11 @@ extern "C" {
 
 #define T3_LIB_VERSION_MAJOR 0
 #define T3_LIB_VERSION_MINOR 1
-#define T3_LIB_VERSION_PATCH 1
+#define T3_LIB_VERSION_PATCH 2
 
 #define T3_ABI_VERSION_MAJOR 0
 #define T3_ABI_VERSION_MINOR 1
-#define T3_ABI_VERSION_PATCH 1
+#define T3_ABI_VERSION_PATCH 2
 
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__cplusplus)
 #  if !defined(T3_LIB_VERSION_MAJOR) || !defined(T3_LIB_VERSION_MINOR) || !defined(T3_LIB_VERSION_PATCH)

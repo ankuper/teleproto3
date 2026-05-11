@@ -1,10 +1,21 @@
 cmake_minimum_required(VERSION 3.20)
-project(teleproto3 LANGUAGES C VERSION 0.1.1)
+project(teleproto3 LANGUAGES C VERSION 0.1.2)
 
 # -----------------------------------------------------------------------
 # Build options (set via -D on the cmake command line)
 # -----------------------------------------------------------------------
 option(T3_BUILD_TESTS "Build and register test programs via CTest" ON)
+
+# -----------------------------------------------------------------------
+# Optional SOCKS5/CONNECT shim (Story 9-1: calls v1 macOS integration)
+# When ON, shim_socks5.c is compiled into libteleproto3, the
+# T3_SHIM_SOCKS5_AVAILABLE=1 preprocessor token is emitted in t3_features.h,
+# and OpenSSL::SSL is linked (shim needs TLS; existing code only used Crypto).
+# -----------------------------------------------------------------------
+option(T3_SHIM_SOCKS5
+    "Build the localhost SOCKS5/CONNECT shim (Epic 9 calls integration). \
+     Requires OpenSSL >= 3.0. OFF by default — not for production builds."
+    OFF)
 
 # -----------------------------------------------------------------------
 # macOS universal binary option (Task 4 — Story 1-13)
@@ -88,7 +99,7 @@ endif()
 # Static library target
 # Artefact: libteleproto3.a (anti-pattern §14: NOT liblibteleproto3.a)
 # -----------------------------------------------------------------------
-add_library(teleproto3 STATIC
+set(_T3_SOURCES
     src/t3_abi_version.c
     src/t3_keyderiv.c
     src/t3_obfuscated2.c
@@ -100,6 +111,13 @@ add_library(teleproto3 STATIC
     src/t3_url_parser.c
     src/csprng/t3_csprng_${T3_CSPRNG_BACKEND_RESOLVED}.c
 )
+
+if(T3_SHIM_SOCKS5)
+    list(APPEND _T3_SOURCES src/shim_socks5.c)
+    message(STATUS "teleproto3: T3_SHIM_SOCKS5=ON — building SOCKS5/CONNECT shim")
+endif()
+
+add_library(teleproto3 STATIC ${_T3_SOURCES})
 
 # -----------------------------------------------------------------------
 # Include directories
@@ -117,6 +135,15 @@ target_include_directories(teleproto3
 # Link libraries
 # -----------------------------------------------------------------------
 target_link_libraries(teleproto3 PUBLIC OpenSSL::Crypto)
+
+if(T3_SHIM_SOCKS5)
+    # Shim uses TLS (SSL_CTX, SSL_connect …); OpenSSL::Crypto alone is insufficient.
+    target_link_libraries(teleproto3 PUBLIC OpenSSL::SSL)
+    # Emit the availability flag so consumers can #include "t3_features.h" and
+    # guard calls to t3_shim_*() without a separate CMake variable.
+    target_compile_definitions(teleproto3 PUBLIC T3_SHIM_SOCKS5_AVAILABLE=1)
+    message(STATUS "teleproto3: t3_features.h will advertise T3_SHIM_SOCKS5_AVAILABLE=1")
+endif()
 
 # Task 3 (Story 1-13): Security.framework for SecRandomCopyBytes on macOS.
 # Without this flag the linker will fail with:
@@ -269,6 +296,38 @@ if(T3_BUILD_TESTS)
                 -DREF_HASH=${_ref_hash}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/vectors/check_kdf_vectors.cmake
         )
+    endif()
+
+    # SOCKS5 conformance fuzzer (Story 9-1 AC #2 — AT-CALL-5)
+    # Built and registered only when T3_SHIM_SOCKS5=ON.
+    if(T3_SHIM_SOCKS5 AND NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
+        add_executable(test_shim_stub
+            tests/socks5_conformance_stub.c
+        )
+        target_include_directories(test_shim_stub PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
+        target_link_libraries(test_shim_stub PRIVATE teleproto3)
+        target_compile_features(test_shim_stub PRIVATE c_std_11)
+        if(NOT MSVC)
+            target_compile_options(test_shim_stub PRIVATE -Wall -Wextra)
+        endif()
+
+        # Register the Python pytest suite as a ctest entry.
+        # Requires Python 3 + pytest + cryptography in the test environment.
+        find_program(Python3_EXECUTABLE NAMES python3 python)
+        if(Python3_EXECUTABLE)
+            add_test(
+                NAME socks5_conformance
+                COMMAND ${Python3_EXECUTABLE} -m pytest -v
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/socks5_conformance_test.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+            )
+            set_tests_properties(socks5_conformance PROPERTIES
+                ENVIRONMENT "T3_SHIM_STUB_BIN=$<TARGET_FILE:test_shim_stub>"
+                TIMEOUT 120
+            )
+        endif()
     endif()
 endif()
 
