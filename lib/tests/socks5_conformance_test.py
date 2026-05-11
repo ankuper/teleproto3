@@ -241,7 +241,9 @@ async def _handle_mock_type3(reader: asyncio.StreamReader,
     writer.write(resp)
     await writer.drain()
 
-    # Read WS frame: session_header(4) + random_header(64)
+    # Read WS frame: random_header(64). The shim ships exactly 64 bytes (no
+    # session_header prefix — the teleproxy obfuscated2 wire protocol does not
+    # carry one; see shim_socks5.c:t3_open() comment).
     hdr = await reader.readexactly(2)
     length = hdr[1] & 0x7F
     masked = bool(hdr[1] & 0x80)
@@ -252,12 +254,11 @@ async def _handle_mock_type3(reader: asyncio.StreamReader,
     if masked:
         for i in range(len(payload)):
             payload[i] ^= mask_key[i % 4]
-    if len(payload) < 68:
+    if len(payload) < 64:
         writer.close()
         return
 
-    # session_header = payload[0:4]; random_header = payload[4:68]
-    rh = bytes(payload[4:68])
+    rh = bytes(payload[0:64])
     sk = _TEST_SECRET_KEY
 
     # Server-side key derivation (mirror of shim):
@@ -290,10 +291,13 @@ async def _handle_mock_type3(reader: asyncio.StreamReader,
 
     async def send_plaintext(data: bytes) -> None:
         ct = srv_enc.update(data)
-        mask = os.urandom(4)
-        masked_ct = bytearray(ct)
-        for i in range(len(masked_ct)): masked_ct[i] ^= mask[i % 4]
-        frame = bytes([0x82, 0x80 | len(ct)]) + mask + bytes(masked_ct)
+        # RFC 6455 §5.1: server-to-client frames MUST NOT be masked.
+        if len(ct) < 126:
+            frame = bytes([0x82, len(ct)]) + ct
+        elif len(ct) <= 65535:
+            frame = bytes([0x82, 126, (len(ct) >> 8) & 0xFF, len(ct) & 0xFF]) + ct
+        else:
+            raise AssertionError(f"frame too large for test mock: {len(ct)}")
         writer.write(frame)
         await writer.drain()
 

@@ -330,11 +330,30 @@ static SSL *tls_connect_host(SSL_CTX *ctx, const char *host, uint16_t port) {
     if (!ssl) { close(fd); return NULL; }  /* P7 */
     SSL_set_fd(ssl, fd);
     SSL_set_tlsext_host_name(ssl, host);
-    /* P1: bind expected peer hostname to the verification params so that
-     * SSL_VERIFY_PEER actually verifies SAN/CN match (not just chain-trust).
-     * Without this, any CA-signed cert for any hostname would pass — MITM. */
-    if (SSL_set1_host(ssl, host) != 1) {
-        SSL_free(ssl); close(fd); return NULL;
+    /* P1: bind expected peer identity to the verification params so that
+     * SSL_VERIFY_PEER actually checks SAN/CN match (not just chain-trust).
+     * Without this, any CA-signed cert for any hostname would pass — MITM.
+     *
+     * IP literals (numeric host like "94.156.131.252" or "::1") must be
+     * pinned via X509_VERIFY_PARAM_set1_ip_asc — they would NOT match a
+     * SAN iPAddress entry through SSL_set1_host, which only walks dNSName
+     * entries (RFC 6125 §6.4.4: DNS names must not contain IP literals).
+     * Hostnames go through SSL_set1_host as before. */
+    {
+        X509_VERIFY_PARAM *vp = SSL_get0_param(ssl);
+        struct in_addr  v4;
+        struct in6_addr v6;
+        int is_ip = inet_pton(AF_INET, host, &v4) == 1
+                 || inet_pton(AF_INET6, host, &v6) == 1;
+        if (is_ip) {
+            if (X509_VERIFY_PARAM_set1_ip_asc(vp, host) != 1) {
+                SSL_free(ssl); close(fd); return NULL;
+            }
+        } else {
+            if (SSL_set1_host(ssl, host) != 1) {
+                SSL_free(ssl); close(fd); return NULL;
+            }
+        }
     }
     if (SSL_connect(ssl) <= 0) {
         SSL_free(ssl); close(fd); return NULL;
