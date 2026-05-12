@@ -1,0 +1,76 @@
+# lib-windows-probe.yml — manual-dispatch probe that verifies libteleproto3
+# compiles cleanly with MSVC on windows-latest. Pre-requisite for the
+# Windows tdesktop CI workflow. No tests, no release artifacts — just a
+# go/no-go on whether the C library builds.
+name: lib Windows MSVC probe
+run-name: lib Windows MSVC probe — ${{ github.event.head_commit.message || 'manual dispatch' }}
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    name: libteleproto3 (Windows MSVC x64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Clone.
+        uses: actions/checkout@v4
+
+      - name: Set up MSVC env (x64).
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: x64
+
+      - name: Locate OpenSSL 3.
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "C:\Program Files\OpenSSL",
+            "C:\Program Files\OpenSSL-Win64",
+            "C:\OpenSSL-Win64",
+            "C:\vcpkg\installed\x64-windows"
+          )
+          $found = $null
+          foreach ($p in $candidates) {
+            if (Test-Path "$p\include\openssl\opensslv.h") {
+              $found = $p
+              break
+            }
+          }
+          if (-not $found) {
+            Write-Error "OpenSSL not located in any candidate path"
+            exit 1
+          }
+          echo "OPENSSL_ROOT_DIR=$found" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "OPENSSL_ROOT_DIR=$found"
+          Get-Content "$found\include\openssl\opensslv.h" | Select-String "OPENSSL_VERSION_STR|OPENSSL_FULL_VERSION_STR" | Select-Object -First 2
+
+      - name: Configure libteleproto3.
+        shell: cmd
+        run: |
+          cd lib
+          cmake -B build -G "Ninja" ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DT3_BUILD_TESTS=OFF ^
+            -DOPENSSL_ROOT_DIR="%OPENSSL_ROOT_DIR%"
+
+      - name: Build libteleproto3.
+        shell: cmd
+        run: |
+          cd lib
+          cmake --build build --config Release --parallel
+
+      - name: Inspect output.
+        shell: pwsh
+        run: |
+          Get-ChildItem -Path "lib\build" -Recurse -Filter "*.lib" | Select-Object FullName, Length | Format-Table -AutoSize
+          Get-ChildItem -Path "lib\build" -Recurse -Filter "teleproto3*" | Select-Object FullName, Length | Format-Table -AutoSize
+
+      - name: Upload artifact.
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-windows-x64-release
+          path: lib/build/*.lib
+          retention-days: 14
+          if-no-files-found: error
