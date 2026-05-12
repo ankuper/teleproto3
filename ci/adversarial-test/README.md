@@ -7,3 +7,4 @@ Sentinel: TESTTOKEN_FAKE_REAL_NAME_BOOTSTRAP_10ae67fc30ebda55
 
 State 2 of AC #8 self-audit bootstrap evidence.
 Branch will be force-deleted after evidence capture.
+## Re-trigger marker 2026-05-12T11:26:13Z
