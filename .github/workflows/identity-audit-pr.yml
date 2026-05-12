@@ -36,6 +36,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # Outer checkout so the local composite action at
+      # .github/actions/identity-audit/action.yml is visible on the runner.
+      # The composite action itself does a fetch-depth: 0 checkout internally
+      # for merge-base computation; this outer one just makes action.yml load.
+      - name: Bootstrap checkout (for local action file)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Run identity audit
         uses: ./.github/actions/identity-audit
         with:
