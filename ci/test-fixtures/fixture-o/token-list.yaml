@@ -1,0 +1,7 @@
+---
+denylist:
+  - id: test-cyrillic-synthetic
+    pattern: '[ИI]ванов'
+    description: 'Synthetic Cyrillic placeholder pattern (Ivanov, common surname — NOT a real-name target). Exercises grep multi-byte character-class matching under non-UTF-8 locales.'
+    scope: diff
+allowlist:

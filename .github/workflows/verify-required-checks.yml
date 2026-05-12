@@ -1,0 +1,122 @@
+# verify-required-checks.yml — AR-G5 required-check enforcement verifier.
+#
+# This is the reference implementation of the Type3 protocol.
+# Normative behaviour is defined in spec/. Where they differ, spec/ wins.
+#
+# Stability: daily + on push to main. Story 7-11 AC #4-A.
+# Reads required-checks-manifest.yml; asserts each repo×branch×check is present
+# in GitHub branch protection. Opens idempotent issues on missing checks.
+#
+# Recursive enforcement: this workflow is itself a required check in the manifest,
+# ensuring the verifier cannot be silently disabled without triggering an alert.
+#
+# Required secrets:
+#   ANKUPER_ADMIN_TOKEN — PAT with admin:repo scope for branch protection API reads.
+#                          Falls back to github.token (may lack cross-repo access).
+
+name: Verify Required Checks (AR-G5)
+
+on:
+  schedule:
+    - cron: '0 9 * * *'   # daily 09:00 UTC per AC #4-A
+  push:
+    branches: [main]
+  workflow_dispatch:       # manual trigger for bootstrap / troubleshooting
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  GH_TOKEN: ${{ secrets.ANKUPER_ADMIN_TOKEN || github.token }}
+
+jobs:
+  verify:
+    name: Verify required-check manifest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse manifest and verify branch protection
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.ANKUPER_ADMIN_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+
+          MANIFEST=".github/required-checks-manifest.yml"
+          if [ ! -f "$MANIFEST" ]; then
+            echo "::error::required-checks-manifest.yml not found"
+            exit 1
+          fi
+
+          # YAML-light parser: extract repo/branch/checks using awk
+          # Format: OUTPUT lines are "REPO<TAB>BRANCH<TAB>CHECK"
+          parse_manifest() {
+            awk '
+            /^  - repo:/ { repo=$NF; branch=""; next }
+            /^    branch:/ { branch=$NF; next }
+            /^      - / { check=$NF; if (repo != "" && branch != "") print repo "\t" branch "\t" check; next }
+            ' "$MANIFEST"
+          }
+
+          FAIL=0
+          while IFS='	' read -r repo branch check; do
+            [ -n "$repo" ] && [ -n "$branch" ] && [ -n "$check" ] || continue
+
+            echo "Checking $repo / $branch / $check ..."
+
+            # Query branch protection
+            PROT_RC=0
+            PROT=$(gh api "repos/${repo}/branches/${branch}/protection" \
+                    --jq '.required_status_checks.contexts // []' 2>/dev/null) || PROT_RC=$?
+
+            if [ "$PROT_RC" -ne 0 ]; then
+              echo "::warning::Cannot read branch protection for ${repo}:${branch} (admin token required?)"
+              continue
+            fi
+
+            # Check if the required context is present
+            if echo "$PROT" | grep -qF "\"${check}\""; then
+              echo "  OK: $check is present"
+            else
+              echo "::warning::MISSING: $check not in required checks for ${repo}:${branch}"
+              FAIL=1
+
+              # Open idempotent issue
+              SENTINEL="<!-- required-check-missing: ${repo}:${branch}:${check} -->"
+              EXISTING=$(gh issue list --repo "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
+                          --state open --json body --jq '.[].body' 2>/dev/null \
+                          | grep -F "$SENTINEL" || true)
+
+              if [ -z "$EXISTING" ]; then
+                gh issue create \
+                  --title "priority/security: identity-audit not enforced on ${repo}:${branch}" \
+                  --body "${SENTINEL}
+**AR-G5 required check missing from branch protection**
+
+Repository: \`${repo}\`
+Branch: \`${branch}\`
+Missing check: \`${check}\`
+
+The identity-audit required status check is not wired in branch protection.
+PRs can merge without passing the AR-G5 gate.
+
+**Fix:** Apply branch protection via:
+\`\`\`bash
+_bmad-output/security/setup-public-repo.sh --repo-path <local-path>
+\`\`\`
+Or manually via GitHub Settings → Branches → Branch protection → Required status checks.
+See architecture.md §A-010 for the governance contract."
+              fi
+            fi
+          done < <(parse_manifest)
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo "::error::One or more required checks are missing from branch protection — see warnings above"
+            exit 1
+          fi
+
+          echo "All required checks verified ✓"

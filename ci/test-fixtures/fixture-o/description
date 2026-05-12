@@ -1,0 +1,1 @@
+Cyrillic denylist pattern matches under LC_CTYPE=C — locale-fallback regression test (P31)

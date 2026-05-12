@@ -1,0 +1,45 @@
+# required-checks-manifest.yml — AR-G5 required status check enforcement manifest.
+#
+# This file is the authoritative list of required status checks that MUST be
+# present in branch protection for each public ankuper repo's protected branch.
+# Source: Story 7-11 AC #4-A. Enforced daily by verify-required-checks.yml.
+#
+# Recursive enforcement: verify-required-checks is itself a manifest entry,
+# ensuring the verifier workflow is also a required check (self-referential guard).
+#
+# Schema: list of {repo, branch, checks[]} objects.
+# repo: GitHub repository in "owner/name" form (under ankuper/ org).
+# branch: protected branch to verify.
+# checks: list of required status check context strings (job.name or status context).
+
+repos:
+  - repo: ankuper/teleproto3
+    branch: main
+    checks:
+      - identity-audit             # AR-G5 gate (Story 7-11)
+      - verify-required-checks     # self-referential: verifier is also required
+
+  - repo: ankuper/teleproto3-installer
+    branch: main
+    checks:
+      - identity-audit
+
+  - repo: ankuper/tdesktop
+    branch: master
+    checks:
+      - identity-audit
+
+  - repo: ankuper/Telegram-iOS
+    branch: master
+    checks:
+      - identity-audit
+
+  - repo: ankuper/Telegram
+    branch: master
+    checks:
+      - identity-audit
+
+  - repo: ankuper/teleproxy
+    branch: main
+    checks:
+      - identity-audit

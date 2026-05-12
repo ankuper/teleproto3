@@ -1,0 +1,184 @@
+# identity-audit/action.yml — AR-G5 identity-audit composite action.
+#
+# This is the reference implementation of the Type3 protocol.
+# Normative behaviour is defined in spec/. Where they differ, spec/ wins.
+#
+# Stability: required check on every public ankuper-repo PR. Story 7-11 AC #3.
+# Wraps ci/identity-audit.sh and injects an idempotent PR comment on violations.
+
+name: 'Identity Audit (AR-G5)'
+description: >
+  Enforce AR-G5 operational-identity firewall on PRs to public ankuper repos.
+  Scans commit metadata and diff content against a CI-secret token list.
+  Fails on match; posts a redacted, idempotent PR comment with rule IDs.
+
+inputs:
+  token-list-secret:
+    description: >
+      The YAML body of the identity token list, stored verbatim in the
+      IDENTITY_AUDIT_TOKEN_LIST_YAML repository secret. Pass as
+      ${{ secrets.IDENTITY_AUDIT_TOKEN_LIST_YAML }}.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Step 1: Full checkout (fetch-depth: 0 required for merge-base computation)
+    - name: Checkout (full history)
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    # Step 2: Fetch base branch so merge-base is resolvable
+    - name: Fetch base branch
+      shell: bash
+      env:
+        GITHUB_BASE_REF: ${{ github.base_ref }}
+      run: |
+        if [ -n "$GITHUB_BASE_REF" ]; then
+          git fetch origin "$GITHUB_BASE_REF"
+        fi
+
+    # Step 3: Compute BASE_SHA via merge-base (force-push-safe)
+    - name: Compute BASE_SHA
+      id: sha
+      shell: bash
+      env:
+        GITHUB_BASE_REF: ${{ github.base_ref }}
+        GITHUB_SHA: ${{ github.sha }}
+      run: |
+        if [ -n "$GITHUB_BASE_REF" ]; then
+          BASE_SHA=$(git merge-base "origin/$GITHUB_BASE_REF" HEAD)
+        else
+          # push-to-main: compare against parent commit
+          BASE_SHA=$(git rev-parse HEAD^1 2>/dev/null || git rev-parse HEAD)
+        fi
+        echo "base_sha=$BASE_SHA" >> "$GITHUB_OUTPUT"
+
+    # Step 4: Write token list secret to temp file (mode 0600)
+    # Secret passed via env: block — GitHub auto-masks env-block secrets in logs.
+    # NEVER echo or printf the secret value; NEVER pass via 'with:' inputs.
+    - name: Write token list to temp file
+      id: write-tokens
+      shell: bash
+      env:
+        IDENTITY_AUDIT_TOKEN_LIST_YAML: ${{ inputs.token-list-secret }}
+      run: |
+        TMPFILE="${RUNNER_TEMP}/identity-tokens-$$.list"
+        printf '%s' "$IDENTITY_AUDIT_TOKEN_LIST_YAML" > "$TMPFILE"
+        chmod 0600 "$TMPFILE"
+        echo "token_list_path=$TMPFILE" >> "$GITHUB_OUTPUT"
+
+    # Step 5: Run identity audit
+    - name: Run identity audit
+      id: audit
+      shell: bash
+      env:
+        IDENTITY_AUDIT_TOKEN_LIST: ${{ steps.write-tokens.outputs.token_list_path }}
+        BASE_SHA: ${{ steps.sha.outputs.base_sha }}
+        HEAD_SHA: ${{ github.sha }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        AUDIT_RC=0
+        bash ci/identity-audit.sh > "${RUNNER_TEMP}/audit-out-$$.txt" 2>&1 || AUDIT_RC=$?
+
+        # Surface redacted findings to the step log (safe — only rule IDs, no tokens)
+        if [ -s "${RUNNER_TEMP}/audit-out-$$.txt" ]; then
+          cat "${RUNNER_TEMP}/audit-out-$$.txt"
+        fi
+
+        echo "audit_rc=$AUDIT_RC" >> "$GITHUB_OUTPUT"
+        echo "audit_out_path=${RUNNER_TEMP}/audit-out-$$.txt" >> "$GITHUB_OUTPUT"
+
+        if [ "$AUDIT_RC" -eq 2 ]; then
+          echo "::error::identity-audit setup error — check token list and workflow configuration"
+          exit 2
+        fi
+        if [ "$AUDIT_RC" -eq 1 ]; then
+          echo "::error::AR-G5 identity-audit FAILED — see violations above (redacted)"
+          exit 1
+        fi
+        exit 0
+
+    # Step 6: Post idempotent PR comment on violation (PR runs only)
+    # Sentinel: <!-- identity-audit-violation: present -->
+    # NEVER include matched substrings — only rule IDs from audit output.
+    - name: Post PR violation comment (idempotent)
+      if: ${{ failure() && github.event_name == 'pull_request' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AUDIT_OUT: ${{ steps.audit.outputs.audit_out_path }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        SENTINEL="<!-- identity-audit-violation: present -->"
+
+        # Extract rule IDs from redacted output (safe — IDs only, no token values)
+        RULE_IDS=$(grep -oE 'REDACTED:rule=[^:]+' "${AUDIT_OUT:-/dev/null}" \
+                   | sed 's/REDACTED:rule=//' | sort -u | tr '\n' ' ' || true)
+
+        # Check for existing sentinel — inject only if absent (idempotent)
+        EXISTING=$(gh pr view "$PR_NUMBER" --json comments --jq '.comments[].body' 2>/dev/null \
+                   | grep -F "$SENTINEL" || true)
+
+        if [ -z "$EXISTING" ]; then
+          BODY="${SENTINEL}
+**:no_entry: AR-G5 identity-audit violation detected**
+
+The following denylist rules matched content in this PR:
+
+\`\`\`
+${RULE_IDS:-<see step log for details>}
+\`\`\`
+
+Matched substrings are redacted. Review commit metadata and diff for tokens
+matching the flagged rule IDs. See \`_bmad-output/security/SCHEMA.md\` for
+rule descriptions (private workspace).
+
+Fix: ensure all commits in this PR use the \`ankuper\` persona
+(\`git config user.name ankuper\`) and remove real-name tokens from diff content."
+
+          gh pr comment "$PR_NUMBER" --body "$BODY"
+        fi
+
+    # Step 7: Open issue on push-to-main violation (post-merge safety net)
+    - name: Open issue on push-to-main violation (idempotent)
+      if: ${{ failure() && github.event_name == 'push' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ github.repository }}
+        AUDIT_OUT: ${{ steps.audit.outputs.audit_out_path }}
+        REF: ${{ github.ref }}
+      run: |
+        BRANCH="${REF#refs/heads/}"
+        SENTINEL="<!-- identity-audit-violation: push: ${BRANCH} -->"
+        RULE_IDS=$(grep -oE 'REDACTED:rule=[^:]+' "${AUDIT_OUT:-/dev/null}" \
+                   | sed 's/REDACTED:rule=//' | sort -u | tr '\n' ' ' || true)
+
+        EXISTING=$(gh issue list --repo "$REPO" --state open --json body \
+                   --jq '.[].body' 2>/dev/null | grep -F "$SENTINEL" || true)
+
+        if [ -z "$EXISTING" ]; then
+          gh issue create --repo "$REPO" \
+            --title "priority/security: AR-G5 identity-audit violation on ${BRANCH}" \
+            --body "${SENTINEL}
+:rotating_light: **AR-G5 post-merge identity audit violation on \`${BRANCH}\`**
+
+Violated rule IDs: \`${RULE_IDS:-<see Actions log>}\`
+
+A commit reached \`${BRANCH}\` that contains identity tokens prohibited by AR-G5.
+Immediate action required: audit recent commits and rewrite history if necessary.
+See architecture.md §A-010 for the governance contract."
+        fi
+
+    # Step 8: Cleanup temp token list file (always, including on failure)
+    - name: Cleanup temp token list
+      if: always()
+      shell: bash
+      env:
+        TOKEN_PATH: ${{ steps.write-tokens.outputs.token_list_path }}
+        AUDIT_OUT: ${{ steps.audit.outputs.audit_out_path }}
+      run: |
+        [ -n "$TOKEN_PATH" ] && rm -f "$TOKEN_PATH" || true
+        [ -n "$AUDIT_OUT"  ] && rm -f "$AUDIT_OUT"  || true
