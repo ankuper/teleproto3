@@ -16,8 +16,8 @@ inputs:
   token-list-secret:
     description: >
       The YAML body of the identity token list, stored verbatim in the
-      IDENTITY_AUDIT_TOKEN_LIST_YAML repository secret. Pass as
-      ${{ secrets.IDENTITY_AUDIT_TOKEN_LIST_YAML }}.
+      IDENTITY_AUDIT_TOKEN_LIST_YAML repository secret. Pass from the
+      caller workflow as a templated secret expression on this input.
     required: true
 
 runs:
@@ -122,23 +122,20 @@ runs:
                    | grep -F "$SENTINEL" || true)
 
         if [ -z "$EXISTING" ]; then
-          BODY="${SENTINEL}
-**:no_entry: AR-G5 identity-audit violation detected**
-
-The following denylist rules matched content in this PR:
-
-\`\`\`
-${RULE_IDS:-<see step log for details>}
-\`\`\`
-
-Matched substrings are redacted. Review commit metadata and diff for tokens
-matching the flagged rule IDs. See \`_bmad-output/security/SCHEMA.md\` for
-rule descriptions (private workspace).
-
-Fix: ensure all commits in this PR use the \`ankuper\` persona
-(\`git config user.name ankuper\`) and remove real-name tokens from diff content."
-
-          gh pr comment "$PR_NUMBER" --body "$BODY"
+          COMMENT_FILE="${RUNNER_TEMP}/identity-audit-comment-$$.md"
+          {
+            printf '%s\n' "$SENTINEL"
+            printf '**:no_entry: AR-G5 identity-audit violation detected**\n\n'
+            printf 'The following denylist rules matched content in this PR:\n\n'
+            printf '```\n%s\n```\n\n' "${RULE_IDS:-<see step log for details>}"
+            printf 'Matched substrings are redacted. Review commit metadata and diff for tokens\n'
+            printf 'matching the flagged rule IDs. See `_bmad-output/security/SCHEMA.md` for\n'
+            printf 'rule descriptions (private workspace).\n\n'
+            printf 'Fix: ensure all commits in this PR use the `ankuper` persona\n'
+            printf '(`git config user.name ankuper`) and remove real-name tokens from diff content.\n'
+          } > "$COMMENT_FILE"
+          gh pr comment "$PR_NUMBER" --body-file "$COMMENT_FILE"
+          rm -f "$COMMENT_FILE"
         fi
 
     # Step 7: Open issue on push-to-main violation (post-merge safety net)
@@ -160,16 +157,19 @@ Fix: ensure all commits in this PR use the \`ankuper\` persona
                    --jq '.[].body' 2>/dev/null | grep -F "$SENTINEL" || true)
 
         if [ -z "$EXISTING" ]; then
+          ISSUE_FILE="${RUNNER_TEMP}/identity-audit-issue-$$.md"
+          {
+            printf '%s\n' "$SENTINEL"
+            printf ':rotating_light: **AR-G5 post-merge identity audit violation on `%s`**\n\n' "$BRANCH"
+            printf 'Violated rule IDs: `%s`\n\n' "${RULE_IDS:-<see Actions log>}"
+            printf 'A commit reached `%s` that contains identity tokens prohibited by AR-G5.\n' "$BRANCH"
+            printf 'Immediate action required: audit recent commits and rewrite history if necessary.\n'
+            printf 'See architecture.md §A-010 for the governance contract.\n'
+          } > "$ISSUE_FILE"
           gh issue create --repo "$REPO" \
             --title "priority/security: AR-G5 identity-audit violation on ${BRANCH}" \
-            --body "${SENTINEL}
-:rotating_light: **AR-G5 post-merge identity audit violation on \`${BRANCH}\`**
-
-Violated rule IDs: \`${RULE_IDS:-<see Actions log>}\`
-
-A commit reached \`${BRANCH}\` that contains identity tokens prohibited by AR-G5.
-Immediate action required: audit recent commits and rewrite history if necessary.
-See architecture.md §A-010 for the governance contract."
+            --body-file "$ISSUE_FILE"
+          rm -f "$ISSUE_FILE"
         fi
 
     # Step 8: Cleanup temp token list file (always, including on failure)
