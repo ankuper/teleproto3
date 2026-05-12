@@ -328,6 +328,54 @@ else
     _skip "P: setup script idempotency" "setup-public-repo.sh not found"
 fi
 
+# ── Fixture R: D3 — allowlist whole-substring match (co-occurring hits still fire)
+printf '\nFixture R:\n'
+run_fixture "R: allowlist suppresses only matched substring" \
+    "$SCRIPT_DIR/fixture-r/token-list.yaml" \
+    "$SCRIPT_DIR/fixture-r/mock-commit.txt" \
+    "$SCRIPT_DIR/fixture-r/mock-diff.txt" \
+    1 "REDACTED:rule=deny-r-leaked:stream=diff"
+# Negative check: deny-r-context must NOT appear (allowlisted away)
+_rtmpout=$(mktemp); _rrc=0
+env IDENTITY_AUDIT_TOKEN_LIST="$SCRIPT_DIR/fixture-r/token-list.yaml" \
+    IDENTITY_AUDIT_MOCK_COMMIT_LOG="$SCRIPT_DIR/fixture-r/mock-commit.txt" \
+    IDENTITY_AUDIT_MOCK_DIFF="$SCRIPT_DIR/fixture-r/mock-diff.txt" \
+    bash "$AUDIT_SCRIPT" > "$_rtmpout" 2>&1 || _rrc=$?
+if grep -qE 'REDACTED:rule=deny-r-context' "$_rtmpout"; then
+    _fail "R': deny-r-context must be allowlisted" "found rule=deny-r-context in output"
+else
+    _pass "R': deny-r-context correctly allowlisted away"
+fi
+rm -f "$_rtmpout"
+
+# ── Fixture S: D3 — allowlist scope filter ────────────────────────────────────
+printf '\nFixture S:\n'
+run_fixture "S: commit-metadata allowlist scope doesn't suppress diff" \
+    "$SCRIPT_DIR/fixture-s/token-list.yaml" \
+    "$SCRIPT_DIR/fixture-s/mock-commit.txt" \
+    "$SCRIPT_DIR/fixture-s/mock-diff.txt" \
+    1 "REDACTED:rule=deny-s:stream=diff"
+# Negative check: commit-metadata stream must be suppressed
+_stmpout=$(mktemp); _src=0
+env IDENTITY_AUDIT_TOKEN_LIST="$SCRIPT_DIR/fixture-s/token-list.yaml" \
+    IDENTITY_AUDIT_MOCK_COMMIT_LOG="$SCRIPT_DIR/fixture-s/mock-commit.txt" \
+    IDENTITY_AUDIT_MOCK_DIFF="$SCRIPT_DIR/fixture-s/mock-diff.txt" \
+    bash "$AUDIT_SCRIPT" > "$_stmpout" 2>&1 || _src=$?
+if grep -qE 'REDACTED:rule=deny-s:stream=commit-metadata' "$_stmpout"; then
+    _fail "S': commit-metadata stream must be allowlisted" "found commit-metadata hit"
+else
+    _pass "S': commit-metadata hit correctly suppressed by scope-filtered allowlist"
+fi
+rm -f "$_stmpout"
+
+# ── Fixture T: D3 — allowlist longer than matched substring doesn't suppress ──
+printf '\nFixture T:\n'
+run_fixture "T: longer allowlist pattern doesn't suppress shorter denylist hit" \
+    "$SCRIPT_DIR/fixture-t/token-list.yaml" \
+    "$SCRIPT_DIR/fixture-t/mock-commit.txt" \
+    "$SCRIPT_DIR/fixture-t/mock-diff.txt" \
+    1 "REDACTED:rule=deny-t:stream=diff"
+
 # ── Fixture O: Cyrillic match under LC_CTYPE=C (locale-fallback) ──────────────
 # Regression test for P31: when invoked under C locale, BSD/GNU grep treats
 # multi-byte UTF-8 as raw bytes — character class `[АA]` mis-fires. The script

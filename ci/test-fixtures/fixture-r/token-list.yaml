@@ -1,0 +1,18 @@
+---
+denylist:
+  - id: deny-r-leaked
+    pattern: 'leakedtoken'
+    description: 'Real-name-like token that must always fire'
+    scope: both
+  - id: deny-r-context
+    pattern: 'contextword'
+    description: 'Context marker that may be legitimately allowlisted'
+    scope: both
+allowlist:
+  - id: allow-r-context
+    pattern: 'contextword'
+    scope: both
+    description: 'Suppress contextword exact-substring only'
+    reason: 'D3: allowlist must NOT also suppress co-occurring leakedtoken on the same diff line'
+    test_fp_example: 'contextword'
+    test_denylist_token_example: 'leakedtoken'

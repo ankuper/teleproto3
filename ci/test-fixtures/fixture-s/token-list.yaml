@@ -1,0 +1,14 @@
+---
+denylist:
+  - id: deny-s
+    pattern: 'targetword'
+    description: 'Target word denylisted in both streams'
+    scope: both
+allowlist:
+  - id: allow-s-commit-only
+    pattern: 'targetword'
+    scope: commit-metadata
+    description: 'Allowlist scoped to commit-metadata only — must NOT suppress diff hits'
+    reason: 'D3: stream-scoped allowlist must respect its declared scope; cross-stream suppression is a fail-open vector'
+    test_fp_example: 'targetword'
+    test_denylist_token_example: 'foreigntoken'

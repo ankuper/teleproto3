@@ -1,0 +1,1 @@
+D3: allowlist pattern longer than matched substring does not suppress under grep -x semantics

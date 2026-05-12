@@ -1,0 +1,14 @@
+---
+denylist:
+  - id: deny-t
+    pattern: 'baretoken'
+    description: 'Denylist captures only the bare token, not its surrounding context'
+    scope: both
+allowlist:
+  - id: allow-t-context-only
+    pattern: 'baretoken-allowed-suffix'
+    scope: both
+    description: 'Allowlist pattern is longer than what denylist captures — must NOT suppress under grep -x'
+    reason: 'D3: bare-token denylist match returns "baretoken"; allowlist pattern requires "-allowed-suffix" which is not present in the captured substring; -x anchors so the allowlist pattern would need to equal "baretoken" alone'
+    test_fp_example: 'baretoken-allowed-suffix'
+    test_denylist_token_example: 'baretoken'

@@ -6,8 +6,9 @@ denylist:
     scope: both
 allowlist:
   - id: allow-overbroad
-    pattern: 'forbiddenword'
-    description: 'Over-broad: matches both FP and real token — should fail self-test'
-    reason: 'Intentionally overbroad to trigger overreach detection'
-    test_fp_example: 'forbiddenword-allowed-context'
+    pattern: '.*word'
+    scope: both
+    description: 'Over-broad: matches both FP and real token under -x — must fail self-test'
+    reason: 'Intentionally overbroad to trigger overreach detection: .*word matches both legitword and forbiddenword when anchored by grep -x'
+    test_fp_example: 'legitword'
     test_denylist_token_example: 'forbiddenword'

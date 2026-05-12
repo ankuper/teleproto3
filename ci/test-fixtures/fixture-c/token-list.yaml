@@ -1,13 +1,14 @@
 ---
 denylist:
   - id: test-1
-    pattern: 'forbiddenword'
-    description: 'Test denylist rule'
+    pattern: 'forbiddenword(-allowed-context)?'
+    description: 'Test denylist rule — captures bare token AND optional context form'
     scope: both
 allowlist:
   - id: allow-context
     pattern: 'forbiddenword-allowed-context'
-    description: 'Suppress legitimate use in allowed context'
-    reason: 'This specific compound string is a legitimate test fixture'
+    scope: both
+    description: 'Suppress legitimate context-form via anchored whole-substring match'
+    reason: 'D3 demonstration: when denylist captures both forms, allowlist suppresses only the context-form'
     test_fp_example: 'forbiddenword-allowed-context'
     test_denylist_token_example: 'forbiddenword'

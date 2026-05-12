@@ -46,7 +46,8 @@ touch "$_MATCH_LOG"
 # Parses the controlled token-list YAML format.
 # Outputs one record per rule:
 #   Denylist:  D<TAB>id<TAB>pattern<TAB>scope
-#   Allowlist: A<TAB>id<TAB>pattern<TAB>test_fp_example<TAB>test_denylist_token_example
+#   Allowlist: A<TAB>id<TAB>pattern<TAB>scope<TAB>test_fp_example<TAB>test_denylist_token_example
+# Allowlist scope defaults to "both" if unspecified (D3 backward-compat).
 _parse_token_list() {
     local file="$1"
     awk '
@@ -62,10 +63,13 @@ _parse_token_list() {
         sub("^[[:space:]]*" key "[[:space:]]*:[[:space:]]*", "", val)
         return strip(val)
     }
-    function flush_rule(    rec) {
+    function flush_rule(    rec, eff_scope) {
         if (id == "" || pat == "") { id=""; pat=""; scope=""; fp=""; tde=""; return }
         if (section == "denylist")  rec = "D\t" id "\t" pat "\t" scope
-        else if (section == "allowlist") rec = "A\t" id "\t" pat "\t" fp "\t" tde
+        else if (section == "allowlist") {
+            eff_scope = (scope == "" ? "both" : scope)
+            rec = "A\t" id "\t" pat "\t" eff_scope "\t" fp "\t" tde
+        }
         else { id=""; pat=""; scope=""; fp=""; tde=""; return }
         print rec
         id=""; pat=""; scope=""; fp=""; tde=""
@@ -153,13 +157,20 @@ _load_token_list() {
         fi
     done < "$_tmpdir/deny_records"
 
-    # Validate all allowlist rules have required fields
-    while IFS='	' read -r _t _aid _apat _fp _tde; do
+    # Validate all allowlist rules have required fields (6 fields per D3: scope added)
+    while IFS='	' read -r _t _aid _apat _ascope _fp _tde; do
         [ "$_t" = "A" ] || continue
         if [ -z "$_apat" ]; then
             printf 'setup-error: malformed-token-list: allowlist rule "%s" missing pattern\n' "$_aid" >&2
             _bad_rule=1
         fi
+        case "$_ascope" in
+            commit-metadata|diff|both) ;;
+            *)
+                printf 'setup-error: malformed-token-list: allowlist rule "%s" has invalid scope "%s" (expected commit-metadata|diff|both)\n' "$_aid" "$_ascope" >&2
+                _bad_rule=1
+                ;;
+        esac
         if [ -z "$_fp" ] || [ -z "$_tde" ]; then
             printf 'setup-error: malformed-token-list: allowlist rule "%s" missing test_fp_example or test_denylist_token_example\n' "$_aid" >&2
             _bad_rule=1
@@ -179,17 +190,28 @@ _load_token_list() {
     fi
 }
 
-# ── Allowlist suppression check ─────────────────────────────────────────────────
-# Returns 0 if line should be SUPPRESSED (allowlisted), 1 if not
+# ── Allowlist suppression check (D3 — Story 7-11 review) ──────────────────────
+# Returns 0 if matched token should be SUPPRESSED (allowlisted), 1 if not.
+#
+# D3 semantics: receives the matched SUBSTRING (extracted via grep -oE), not
+# the full grep'd line. Allowlist pattern is tested via `grep -qxE` so the
+# pattern must match the ENTIRE substring (anchored-by-grep -x, regardless of
+# whether the operator wrote ^/$ explicitly). Stream scope filters allowlist
+# rules: a commit-metadata-scoped allowlist cannot suppress diff-stream hits.
 _is_allowlisted() {
-    local matched_text="$1"
+    local matched_substring="$1"
     local stream="$2"      # commit-metadata | diff
-    local rc=0
 
-    while IFS='	' read -r _type aid apat _fp _tde; do
+    while IFS='	' read -r _type aid apat ascope _fp _tde; do
         [ "$_type" = "A" ] || continue
         [ -n "$apat" ]     || continue
-        if printf '%s\n' "$matched_text" | grep -qE "$apat" 2>/dev/null; then
+        # Scope filter: skip allowlist rules that don't apply to current stream
+        if [ "$ascope" != "both" ] && [ "$ascope" != "$stream" ]; then
+            continue
+        fi
+        # Anchored whole-substring match (grep -x = match entire line, where
+        # the "line" here is the single-line matched substring we pass on stdin)
+        if printf '%s\n' "$matched_substring" | grep -qxE "$apat" 2>/dev/null; then
             return 0  # suppressed
         fi
     done < "$_tmpdir/allow_records"
@@ -198,19 +220,20 @@ _is_allowlisted() {
 }
 
 # ── Allowlist self-test (AC #2, Fixture K) ─────────────────────────────────────
+# D3: mirror production semantics — grep -qxE (anchored whole-substring match).
 _run_allowlist_self_test() {
-    while IFS='	' read -r _type aid apat fp_ex tde_ex; do
+    while IFS='	' read -r _type aid apat _ascope fp_ex tde_ex; do
         [ "$_type" = "A" ] || continue
         [ -n "$apat" ]     || continue
 
         # (a) test_fp_example must be matched (suppressed) by this allowlist rule
-        if ! printf '%s\n' "$fp_ex" | grep -qE "$apat" 2>/dev/null; then
+        if ! printf '%s\n' "$fp_ex" | grep -qxE "$apat" 2>/dev/null; then
             printf 'setup-error: allowlist-overreach: rule=%s: test_fp_example not matched by allow pattern\n' "$aid" >&2
             exit "$EXIT_SETUP"
         fi
 
         # (b) test_denylist_token_example must NOT be matched by this allowlist rule
-        if printf '%s\n' "$tde_ex" | grep -qE "$apat" 2>/dev/null; then
+        if printf '%s\n' "$tde_ex" | grep -qxE "$apat" 2>/dev/null; then
             printf 'setup-error: allowlist-overreach: rule=%s: test_denylist_token_example would be over-suppressed\n' "$aid" >&2
             exit "$EXIT_SETUP"
         fi
@@ -285,15 +308,18 @@ _run_audit() {
             if [ -s "$_COMMIT_STREAM" ]; then
                 _raw="$_tmpdir/raw_cm_${did}"
                 _grep_rc=0
-                grep -E "$dpat" "$_COMMIT_STREAM" > "$_raw" 2>/dev/null || _grep_rc=$?
+                # D3: grep -oE extracts each MATCHED SUBSTRING on its own line
+                # (not the full surrounding line), so the allowlist check sees
+                # exactly what the denylist captured.
+                grep -oE "$dpat" "$_COMMIT_STREAM" > "$_raw" 2>/dev/null || _grep_rc=$?
                 if [ "$_grep_rc" -gt 1 ]; then
                     printf 'setup-error: grep failed (rule=%s, stream=commit-metadata, rc=%s)\n' \
                         "$did" "$_grep_rc" >&2
                     exit "$EXIT_SETUP"
                 fi
-                while IFS= read -r _line; do
-                    [ -n "$_line" ] || continue
-                    if ! _is_allowlisted "$_line" "commit-metadata"; then
+                while IFS= read -r _substring; do
+                    [ -n "$_substring" ] || continue
+                    if ! _is_allowlisted "$_substring" "commit-metadata"; then
                         printf '<REDACTED:rule=%s:stream=commit-metadata>\n' "$did" >> "$_MATCH_LOG"
                     fi
                 done < "$_raw"
@@ -305,15 +331,15 @@ _run_audit() {
             if [ -s "$_DIFF_STREAM" ]; then
                 _raw="$_tmpdir/raw_diff_${did}"
                 _grep_rc=0
-                grep -E "$dpat" "$_DIFF_STREAM" > "$_raw" 2>/dev/null || _grep_rc=$?
+                grep -oE "$dpat" "$_DIFF_STREAM" > "$_raw" 2>/dev/null || _grep_rc=$?
                 if [ "$_grep_rc" -gt 1 ]; then
                     printf 'setup-error: grep failed (rule=%s, stream=diff, rc=%s)\n' \
                         "$did" "$_grep_rc" >&2
                     exit "$EXIT_SETUP"
                 fi
-                while IFS= read -r _line; do
-                    [ -n "$_line" ] || continue
-                    if ! _is_allowlisted "$_line" "diff"; then
+                while IFS= read -r _substring; do
+                    [ -n "$_substring" ] || continue
+                    if ! _is_allowlisted "$_substring" "diff"; then
                         printf '<REDACTED:rule=%s:stream=diff>\n' "$did" >> "$_MATCH_LOG"
                     fi
                 done < "$_raw"
