@@ -1,8 +1,5 @@
 # verify-required-checks.yml — AR-G5 required-check enforcement verifier.
 #
-# This is the reference implementation of the Type3 protocol.
-# Normative behaviour is defined in spec/. Where they differ, spec/ wins.
-#
 # Stability: daily + on push to main. Story 7-11 AC #4-A.
 # Reads required-checks-manifest.yml; asserts each repo×branch×check is present
 # in GitHub branch protection. Opens idempotent issues on missing checks.
@@ -52,29 +49,62 @@ jobs:
             exit 1
           fi
 
-          # YAML-light parser: extract repo/branch/checks using awk
-          # Format: OUTPUT lines are "REPO<TAB>BRANCH<TAB>CHECK"
+          # P9: YAML-light parser — extract repo/branch/checks robustly.
+          # Old `$NF`-based parser read only the last whitespace-token, which
+          # broke on values with inline comments. Now we strip everything after
+          # `:` and trim quotes/whitespace; also strip inline `#...` comments.
+          # Output: "REPO<TAB>BRANCH<TAB>CHECK"
           parse_manifest() {
             awk '
-            /^  - repo:/ { repo=$NF; branch=""; next }
-            /^    branch:/ { branch=$NF; next }
-            /^      - / { check=$NF; if (repo != "" && branch != "") print repo "\t" branch "\t" check; next }
+            function strip(s) {
+                sub(/[[:space:]]*#.*$/, "", s)
+                gsub(/^[[:space:]"\x27]+|[[:space:]"\x27]+$/, "", s)
+                return s
+            }
+            function val(line, key,    v) {
+                v = line; sub("^[[:space:]]*" key "[[:space:]]*:[[:space:]]*", "", v)
+                return strip(v)
+            }
+            /^  - repo:/    { repo = val($0, "-[[:space:]]*repo"); branch=""; next }
+            /^    branch:/  { branch = val($0, "branch"); next }
+            /^      - /     {
+                line = $0
+                sub(/^[[:space:]]*-[[:space:]]*/, "", line)
+                check = strip(line)
+                if (repo != "" && branch != "" && check != "") print repo "\t" branch "\t" check
+                next
+            }
             ' "$MANIFEST"
           }
 
+          # P9: distinguish 404 (no protection) from 401/403 (auth) so the
+          # workflow fails fast when our credentials cannot see the repo,
+          # rather than silently treating both as "skip with warning".
           FAIL=0
           while IFS='	' read -r repo branch check; do
             [ -n "$repo" ] && [ -n "$branch" ] && [ -n "$check" ] || continue
 
             echo "Checking $repo / $branch / $check ..."
 
-            # Query branch protection
+            # Capture stderr from gh api so we can classify the failure
             PROT_RC=0
+            PROT_RESP_FILE=$(mktemp)
             PROT=$(gh api "repos/${repo}/branches/${branch}/protection" \
-                    --jq '.required_status_checks.contexts // []' 2>/dev/null) || PROT_RC=$?
+                    --jq '.required_status_checks.contexts // []' \
+                    2>"$PROT_RESP_FILE") || PROT_RC=$?
+            PROT_ERR=$(cat "$PROT_RESP_FILE"); rm -f "$PROT_RESP_FILE"
 
             if [ "$PROT_RC" -ne 0 ]; then
-              echo "::warning::Cannot read branch protection for ${repo}:${branch} (admin token required?)"
+              if echo "$PROT_ERR" | LC_ALL=C grep -qiE '404|Branch not protected|Not Found'; then
+                echo "::error::No branch protection at all on ${repo}:${branch} — ${check} cannot be enforced"
+                FAIL=1
+              elif echo "$PROT_ERR" | LC_ALL=C grep -qiE '401|403|Bad credentials|Resource not accessible'; then
+                echo "::error::ANKUPER_ADMIN_TOKEN cannot read ${repo}:${branch} branch protection (auth) — verifier is blind"
+                FAIL=1
+              else
+                echo "::error::Unexpected gh api failure for ${repo}:${branch} (rc=${PROT_RC}): $PROT_ERR"
+                FAIL=1
+              fi
               continue
             fi
 
@@ -85,31 +115,29 @@ jobs:
               echo "::warning::MISSING: $check not in required checks for ${repo}:${branch}"
               FAIL=1
 
-              # Open idempotent issue
+              # Open idempotent issue. Build body via printf+file (the P33
+              # lesson: multi-line bash strings break the surrounding YAML
+              # block scalar when inner lines start at column 1 with `**` etc).
               SENTINEL="<!-- required-check-missing: ${repo}:${branch}:${check} -->"
               EXISTING=$(gh issue list --repo "$(gh repo view --json nameWithOwner --jq .nameWithOwner)" \
                           --state open --json body --jq '.[].body' 2>/dev/null \
                           | grep -F "$SENTINEL" || true)
 
               if [ -z "$EXISTING" ]; then
+                BODY_FILE="$(mktemp)"
+                printf '%s\n' "$SENTINEL" >> "$BODY_FILE"
+                printf '**AR-G5 required check missing from branch protection**\n\n' >> "$BODY_FILE"
+                printf 'Repository: `%s`\n' "$repo" >> "$BODY_FILE"
+                printf 'Branch: `%s`\n' "$branch" >> "$BODY_FILE"
+                printf 'Missing check: `%s`\n\n' "$check" >> "$BODY_FILE"
+                printf 'The identity-audit required status check is not wired in branch protection.\n' >> "$BODY_FILE"
+                printf 'PRs can merge without passing the AR-G5 gate.\n\n' >> "$BODY_FILE"
+                printf '**Fix:** Apply branch protection via the operator runbook.\n' >> "$BODY_FILE"
+                printf 'See architecture.md §A-010 for the governance contract.\n' >> "$BODY_FILE"
                 gh issue create \
                   --title "priority/security: identity-audit not enforced on ${repo}:${branch}" \
-                  --body "${SENTINEL}
-**AR-G5 required check missing from branch protection**
-
-Repository: \`${repo}\`
-Branch: \`${branch}\`
-Missing check: \`${check}\`
-
-The identity-audit required status check is not wired in branch protection.
-PRs can merge without passing the AR-G5 gate.
-
-**Fix:** Apply branch protection via:
-\`\`\`bash
-_bmad-output/security/setup-public-repo.sh --repo-path <local-path>
-\`\`\`
-Or manually via GitHub Settings → Branches → Branch protection → Required status checks.
-See architecture.md §A-010 for the governance contract."
+                  --body-file "$BODY_FILE"
+                rm -f "$BODY_FILE"
               fi
             fi
           done < <(parse_manifest)

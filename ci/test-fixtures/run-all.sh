@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# run-all.sh — test runner for ci/identity-audit.sh fixtures (A–N, P, Q).
-#
-# This is the reference implementation of the Type3 protocol.
-# Normative behaviour is defined in spec/. Where they differ, spec/ wins.
+# run-all.sh — test runner for ci/identity-audit.sh fixtures.
 #
 # Stability: test harness; run from any working directory. Story 7-11 Task 1.
 # Usage: bash teleproto3/ci/test-fixtures/run-all.sh
@@ -279,7 +276,9 @@ _mrc=0
     rm -f "$_mtmp"
 ) || _mrc=$?
 rm -rf "$_mdir"
-[ "$_mrc" -ne 0 ] && FAIL=$((FAIL+1)) || PASS=$((PASS+1))
+# P15: explicit if-then-else (the `&&...||...` idiom is a known shell trap
+# under set -e: if the && branch's $? is nonzero, the || branch still fires)
+if [ "$_mrc" -ne 0 ]; then FAIL=$((FAIL+1)); else PASS=$((PASS+1)); fi
 
 # ── Fixture N: idempotency — two runs produce identical output ────────────────
 printf '\nFixture N:\n'

@@ -1,8 +1,5 @@
 # identity-audit-pr.yml — AR-G5 identity-audit gate for public ankuper repos.
 #
-# This is the reference implementation of the Type3 protocol.
-# Normative behaviour is defined in spec/. Where they differ, spec/ wins.
-#
 # Stability: required check on every PR to every public ankuper repo. Story 7-11 AC #4.
 # No path filter — AR-G5 applies to every PR regardless of which files are touched.
 # Defense-in-depth: also runs on push to main as a post-merge safety net.
