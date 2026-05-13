@@ -63,6 +63,17 @@ extern "C" {
 #define T3_ABI_VERSION_MINOR 1
 #define T3_ABI_VERSION_PATCH 2
 
+/* MSVC's C++ frontend doesn't accept the C11 _Static_assert keyword. Pick the
+   right keyword per language: static_assert in C++11+, _Static_assert in C11+,
+   no-op otherwise. */
+#if defined(__cplusplus)
+#  define T3_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#  define T3_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#else
+#  define T3_STATIC_ASSERT(cond, msg)
+#endif
+
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__cplusplus)
 #  if !defined(T3_LIB_VERSION_MAJOR) || !defined(T3_LIB_VERSION_MINOR) || !defined(T3_LIB_VERSION_PATCH)
 #    error "T3_LIB_VERSION_* macros missing"
@@ -70,11 +81,11 @@ extern "C" {
 #  if !defined(T3_ABI_VERSION_MAJOR) || !defined(T3_ABI_VERSION_MINOR) || !defined(T3_ABI_VERSION_PATCH)
 #    error "T3_ABI_VERSION_* macros missing"
 #  endif
-_Static_assert(T3_LIB_VERSION_MAJOR == T3_ABI_VERSION_MAJOR, "lib and ABI MAJOR must match");
-_Static_assert(T3_LIB_VERSION_MINOR == T3_ABI_VERSION_MINOR, "lib and ABI MINOR must match");
-_Static_assert(T3_LIB_VERSION_PATCH == T3_ABI_VERSION_PATCH, "lib and ABI PATCH must match");
-_Static_assert(T3_ABI_VERSION_MAJOR >= 0 && T3_ABI_VERSION_MINOR >= 0 && T3_ABI_VERSION_PATCH >= 0,
-               "ABI version components must be non-negative");
+T3_STATIC_ASSERT(T3_LIB_VERSION_MAJOR == T3_ABI_VERSION_MAJOR, "lib and ABI MAJOR must match");
+T3_STATIC_ASSERT(T3_LIB_VERSION_MINOR == T3_ABI_VERSION_MINOR, "lib and ABI MINOR must match");
+T3_STATIC_ASSERT(T3_LIB_VERSION_PATCH == T3_ABI_VERSION_PATCH, "lib and ABI PATCH must match");
+T3_STATIC_ASSERT(T3_ABI_VERSION_MAJOR >= 0 && T3_ABI_VERSION_MINOR >= 0 && T3_ABI_VERSION_PATCH >= 0,
+                 "ABI version components must be non-negative");
 #endif
 
 #define T3_INTERNAL_STR_(x) #x
@@ -161,8 +172,8 @@ typedef struct {
                                            * SHALL NOT appear in production traffic */
 
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__cplusplus)
-_Static_assert(sizeof(t3_header_t) == 4,
-               "t3_header_t must be exactly 4 bytes (no padding) — wire shape frozen since v0.1.0");
+T3_STATIC_ASSERT(sizeof(t3_header_t) == 4,
+                 "t3_header_t must be exactly 4 bytes (no padding) — wire shape frozen since v0.1.0");
 #endif
 
 /* --------------------------------------------------------------------
@@ -185,8 +196,8 @@ typedef struct {
 } t3_callbacks_t;
 
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__cplusplus)
-_Static_assert(offsetof(t3_callbacks_t, struct_size) == 0,
-               "t3_callbacks_t.struct_size must be the first field for forward-compat sentinel");
+T3_STATIC_ASSERT(offsetof(t3_callbacks_t, struct_size) == 0,
+                 "t3_callbacks_t.struct_size must be the first field for forward-compat sentinel");
 #endif
 
 /* --------------------------------------------------------------------
