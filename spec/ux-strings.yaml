@@ -2,68 +2,170 @@
 # Normative: translation keys are stable across MINOR releases.
 # Key renames or removals require a MAJOR spec bump.
 #
-# Languages tracked: en, ru, fa, zh.
-# TODO(spec-v0.1.0): fill in real strings; these are placeholders.
+# Locales tracked: en, ru, fa, zh. All four are required at compliance
+# level Full; missing locale = hard fail (spec-a11y-strings.yml).
+#
+# Every entry MUST carry a screen-reader metadata block per
+# ux-conformance.md §8. `verified: false` until a native reviewer
+# audits the translation.
+#
+# AR-C1 ban list — no entry in any locale may contain the seven literal
+# tokens (Latin / Cyrillic / Persian / Han). Case-insensitive substring
+# match (style-guide §8 / UX-DR24). The token table is enumerated inside
+# the ban-list-doc sentinel in ux-conformance.md §7.
 
 spec_version: 0.1.0-draft
-last_updated: 2026-04-24
+last_updated: 2026-05-14
 
 strings:
-  state.connected.title:
+
+  # ===== C1 indicator labels (UX-DR20 + UX-DR34) =====
+  # Map 1:1 to the t3_retry_state_t enum + idle/connecting transient
+  # states; see ux-conformance.md §9.
+
+  c1.idle.label:
+    en: "Not connected"
+    ru: "Нет соединения"
+    fa: "متصل نیست"
+    zh: "未连接"
+    pronunciation_context: adjective
+    max_utterance_length_ms: 900
+    interruption_behavior: queue
+    verified: false
+
+  c1.connecting.label:
+    en: "Connecting"
+    ru: "Подключение"
+    fa: "در حال اتصال"
+    zh: "正在连接"
+    pronunciation_context: verb_progressive
+    max_utterance_length_ms: 900
+    interruption_behavior: queue
+    verified: false
+
+  c1.connected.label:
     en: "Connected"
     ru: "Подключено"
     fa: "متصل"
     zh: "已连接"
+    pronunciation_context: adjective
+    max_utterance_length_ms: 700
+    interruption_behavior: queue
+    verified: false
 
-  state.degraded.title:
-    en: "Degraded connection"
+  c1.connected.unverified.label:
+    en: "Connected (unverified)"
+    ru: "Подключено (без проверки)"
+    fa: "متصل (تأیید نشده)"
+    zh: "已连接（未验证）"
+    pronunciation_context: adjective
+    max_utterance_length_ms: 1100
+    interruption_behavior: queue
+    verified: false
+
+  c1.degraded.t12.label:
+    en: "Connection unstable"
     ru: "Соединение нестабильно"
     fa: "اتصال ناپایدار"
     zh: "连接不稳定"
+    pronunciation_context: adjective
+    max_utterance_length_ms: 1000
+    interruption_behavior: queue
+    verified: false
 
-  state.offline.title:
-    en: "Offline"
-    ru: "Нет соединения"
-    fa: "آفلاین"
-    zh: "离线"
+  c1.degraded.t3.label:
+    en: "Connection severely degraded"
+    ru: "Соединение сильно ухудшено"
+    fa: "اتصال به شدت ضعیف است"
+    zh: "连接严重恶化"
+    pronunciation_context: adjective
+    max_utterance_length_ms: 1200
+    interruption_behavior: queue
+    verified: false
+
+  # ===== Companion glyph / pairing flow =====
+  # story 4.x: BLE handshake prompt during companion-device pairing.
+
+  ble.handshake.prompt:
+    en: "Hold your phone near the other device"
+    ru: "Поднесите телефон ближе к другому устройству"
+    fa: "تلفن خود را نزدیک دستگاه دیگر نگه دارید"
+    zh: "请将手机靠近另一台设备"
+    pronunciation_context: verb_imperative
+    max_utterance_length_ms: 2400
+    interruption_behavior: queue
+    verified: false
+
+  # ===== Tier-3 toast (UX-DR30) =====
+  # story 2.6: the ONLY Type3-specific user-visible copy.
+  # j4 = AR-J4 (operator-artefact catalogue, item 4 toast template).
+
+  j4.tier3.toast:
+    en: "Connection unstable. Tap to choose a different server or use direct connection."
+    ru: "Соединение нестабильно. Нажмите, чтобы выбрать другой сервер или прямое подключение."
+    fa: "اتصال ناپایدار است. برای انتخاب سرور دیگر یا اتصال مستقیم، ضربه بزنید."
+    zh: "连接不稳定。点击以选择其他服务器或直接连接。"
+    pronunciation_context: other
+    max_utterance_length_ms: 4500
+    interruption_behavior: preempt
+    verified: false
+
+  # ===== User actions (preserved from v0.1.0-draft 2026-04-24) =====
+  # Already dotted-segmented; semantic stays under `action.*` namespace
+  # (NOT renamed into c1.* — these are imperatives, not C1 indicator
+  # labels). Renaming requires a MAJOR spec bump.
 
   action.retry:
     en: "Retry"
     ru: "Повторить"
     fa: "تلاش مجدد"
     zh: "重试"
+    pronunciation_context: verb_imperative
+    max_utterance_length_ms: 500
+    interruption_behavior: queue
+    verified: false
 
   action.rotate:
     en: "Switch server"
     ru: "Сменить сервер"
     fa: "تعویض سرور"
     zh: "切换服务器"
+    pronunciation_context: verb_imperative
+    max_utterance_length_ms: 800
+    interruption_behavior: queue
+    verified: false
 
   action.report:
     en: "Report issue"
     ru: "Сообщить о проблеме"
     fa: "گزارش مشکل"
     zh: "报告问题"
+    pronunciation_context: verb_imperative
+    max_utterance_length_ms: 700
+    interruption_behavior: queue
+    verified: false
 
-  # story 2.6: tier-3 toast — the ONLY Type3-specific user-visible copy per UX-DR30.
-  # Ban-list clean: none of en/ru/fa/zh contain the seven banned tokens.
-  ui.tier3-toast:
-    en: "Connection unstable. Tap to choose a different server or use direct connection."
-    ru: "Соединение нестабильно. Нажмите, чтобы выбрать другой сервер или прямое подключение."
-    fa: "اتصال ناپایدار است. برای انتخاب سرور دیگر یا اتصال مستقیم، ضربه بزنید."
-    zh: "连接不稳定。点击以选择其他服务器或直接连接。"
+  # ===== Tier-3 toast action label (story 2.6) =====
 
-  # story 2.6 (via story 2.4 Dev Notes): single tappable action label on tier-3 toast.
   ui.tier3-action-switch:
     en: "Choose"
     ru: "Выбрать"
     fa: "انتخاب"
     zh: "选择"
+    pronunciation_context: verb_imperative
+    max_utterance_length_ms: 500
+    interruption_behavior: queue
+    verified: false
 
-  # story 2.6 (via story 2.4 PREREQUISITE): shown when OS-native secure storage is unavailable.
-  # Ban-list clean: no banned tokens in any locale.
+  # ===== Secure-storage error (story 2.4 prerequisite) =====
+  # Shown when OS-native secure storage is unavailable.
+
   ui.secure-storage-unavailable:
     en: "Secure storage unavailable"
     ru: "Безопасное хранилище недоступно"
     fa: "حافظهٔ امن در دسترس نیست"
     zh: "安全存储不可用"
+    pronunciation_context: adjective
+    max_utterance_length_ms: 1400
+    interruption_behavior: queue
+    verified: false
