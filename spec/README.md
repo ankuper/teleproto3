@@ -1,6 +1,6 @@
 ---
 spec_version: 0.1.0-draft
-last_updated: 2026-04-24
+last_updated: 2026-05-14
 status: draft
 ---
 
@@ -31,9 +31,17 @@ specification.
    constraints, FR43 retry heuristic.
 8. [`ux-conformance.md`](ux-conformance.md) — three states × three
    actions for client UI.
-9. [`conformance-procedure.md`](conformance-procedure.md) — how the
-   language-agnostic harness in `conformance/` interrogates an
-   implementation.
+9. [`recovery-letter.md`](recovery-letter.md) — operator disaster-recovery
+   PDF artefact contract: anatomy, PDF/UA, locales, deterministic render.
+10. [`handoff-card.md`](handoff-card.md) — Giver-to-Recipient handoff card
+    contract: variants, paper weight, visual discipline.
+11. [`qr-sticker.md`](qr-sticker.md) — unmarked QR sticker contract:
+    pure-QR rule, sizes, error-correction level, print specification.
+12. [`cli-stdout.md`](cli-stdout.md) — operator CLI stdout schema:
+    status prefixes, indentation, TTY vs pipe, no decoration.
+13. [`conformance-procedure.md`](conformance-procedure.md) — how the
+    language-agnostic harness in `conformance/` interrogates an
+    implementation.
 
 ## Normative artefacts
 

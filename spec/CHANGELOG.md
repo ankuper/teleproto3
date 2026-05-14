@@ -6,6 +6,80 @@ with prefixed tags (`spec-v0.1.0`, `spec-v1.0.0`, ...).
 ## [Unreleased]
 
 ### Added
+- A-011 (2026-05-14, Story 1-5a): operator-artefact spec landing.
+  Added `spec/recovery-letter.md` (AR-C6 / UX-DR9 — six-section A4 / US-Letter
+  tri-foldable PDF contract; PDF/UA per UX-DR22; locales en/ru/fa/zh-Hans;
+  deterministic-render invariant; Typst implementation deferred to Epic 3 / 8).
+  Added `spec/handoff-card.md` (UX-DR10 — credit-card / A6 / postcard / business-card
+  variants on 80 gsm; AR-C1 visual discipline; crop marks for home printing).
+  Added `spec/qr-sticker.md` (UX-DR11 — pure-QR; sizes 25–70 mm; error-correction
+  level M; SVG default + PNG via `--format=png`; module-density guards).
+  Added `spec/cli-stdout.md` (UX-DR12 — `[ok]/[warn]/[err]/[info]` prefixes;
+  two-space indent; TTY-vs-pipe via stream-is-interactive-terminal test;
+  `NO_COLOR` + `TERM=dumb` honoured; structured-output `--output=` reserved per
+  COP-7, schema deferred to Epic 8). Reading order in `spec/README.md` extended
+  with items 9–12; `conformance-procedure.md` renumbered 9 → 13. Re-does the
+  content of Story 1-5's 2026-04-28 close-out, which was demoted `done → review`
+  on 2026-05-13 per the sprint-wide trust audit (`_bmad-output/process/
+  change-type-checklists.md` §Worked Example C1) when its four `[NEW]` File List
+  entries were existence-checked as fictional.
+- E-002 (2026-05-13, Story 1-3a): `spec/anti-probe.md` §8 Timing Invariants
+  normative landing in TOST + Spearman + Bonferroni formulation. Supersedes
+  the legacy Mann-Whitney U phrasing in `_bmad-output/planning-artifacts/epics.md`
+  AR-C2 (style-guide §14.8 anti-pattern). N_required gate derived from pilot σ̂
+  in `conformance/baselines/lib-v0.1.x/ar-c2-pilot.yaml`. Bucket edges aligned
+  with Story 1-10 fuzz harness (5 buckets: [0,63]/[64,255]/[256,1023]/[1024,4095]/
+  [4096,16383]). Cross-refs: `lib/fuzz/analyse.py` (1-10, already aligned),
+  `conformance/gates/timing_invariant.py` (7-2 — Mann-Whitney → TOST + Bonferroni
+  rewrite tracked under Story 7-2 D1 resolution, not this story).
+- A-010 (2026-05-12, Story 7-1 code-review D2): A-007 consumer-side split
+  rule. §5.2 result-schema gains optional `result.query` and
+  `result.fragment` fields. Consumers parsing a domain with a literal `?`
+  / `#` octet (a producer-side A-007 violation) MUST route the offending
+  suffix into `result.query` / `result.fragment` so that `result.host`
+  stays DNS-clean and `result.path` stays URL-clean by construction. The
+  split is informational on the consumer side; the producer-side
+  MUST-NOT-emit rule from A-007 is unchanged. Schema strictness clause
+  amended to make optional fields verifier-compared only when the vector
+  declares them. Driven by code-review finding that `result.host =
+  "example.invalid?q=1"` is HTTP-injection-adjacent surface.
+- A-009 (2026-05-03, Story 1-11): `T3_CSPRNG_BACKEND` first-class enum value in
+  `lib/include/t3_platform.h`. Default value `none`. Producer-side RNG selection
+  is an implementation detail and MUST NOT alter KDF output or secret-format wire
+  encoding. A-009 is orthogonal to the secret-format spec; it constrains the
+  platform-layer API surface only. Cross-ref: `lib/include/t3_platform.h`.
+
+  ### Test Vectors (Story 7-1)
+  New section `kdf-cross-csprng:` in `conformance/vectors/unit.json` — 5 vectors
+  confirming that KDF output is byte-identical across all CSPRNG backend values:
+  `kdf-csprng-backend-none`, `kdf-csprng-backend-linux-getrandom`,
+  `kdf-csprng-backend-macos-secrandom`, `kdf-csprng-backend-windows-bcrypt`,
+  `kdf-csprng-backend-invalid-value` (negative: wire-class `INVALID_ARG` with
+  `detail.lib_code="INVALID_CONFIG"`; `t3_init()` MUST return
+  `T3_ERR_INVALID_CONFIG` for unrecognised backend string).
+  All 5 vectors marked `expected_status: pending-implementation` pending a Linux
+  reference-impl run (follow-up 7-1-A).
+
+- A-007 (2026-04-28, Story 1-1 round-9): Producer-side normative `?` / `#`
+  rejection. Producers MUST NOT emit a secret whose `host` or `path` contains a
+  literal `0x3f` (`?`) or `0x23` (`#`) octet. These characters create ambiguity
+  with HTTP query-string / fragment semantics when the `host[/path]` pair is
+  embedded verbatim in HTTP request targets. Consumers MUST parse gracefully
+  (Postel principle — lenient parsing, strict producing). URL-encoded forms
+  (`%3F`, `%23`) are unaffected; the encoding is a consumer-side concern.
+  Cross-ref: `secret-format.md §2.1 producer-rules`.
+
+  ### Test Vectors (Story 7-1)
+  Five vectors added to `conformance/vectors/unit.json` `secret-format:` array:
+  `a007-host-with-query` (host `?` — consumer accepts, routes suffix to `result.query` per A-010),
+  `a007-host-with-fragment` (host `#` — consumer accepts, routes suffix to `result.fragment` per A-010),
+  `a007-path-with-query` (path `?` — consumer accepts, routes suffix to `result.query`),
+  `a007-path-with-fragment` (path `#` — consumer accepts, routes suffix to `result.fragment`),
+  `a007-path-with-percent-encoded-query` (path `%3F` — consumer accepts as passthrough; no split).
+  Summary: A-007 producer-side rule unchanged; consumer-side split lands as A-010.
+  All 5 consumer vectors pass (`ok: true`); `result.host` and `result.path` remain
+  byte-clean by construction.
+
 - W-001 (2026-04-27, Story 1-2 Round-8 close-out): `spec/wire-format.md`
   §4 obfuscated stream lifted from ERRATA-deferred to normative.
   §4.1 Quick reference (informative summary + 4 top-level MUSTs:
@@ -53,6 +127,18 @@ with prefixed tags (`spec-v0.1.0`, `spec-v1.0.0`, ...).
   valid UTF-8 single-byte scalars. §3.1 valid-`t3_secret_t` predicate
   extended to include rule 6. §1.1 frontmatter `amendment_log` records
   A-006.
+
+  ### Test Vectors (Story 7-1)
+  Task 3 — 5 thematic vectors in `secret-format:` array:
+  `a006-lf-reject` (0x0A mid-host, rule=control-byte),
+  `a006-cr-reject` (0x0D mid-host, rule=control-byte),
+  `a006-dot-path-passthrough` (`/.` — no normalisation),
+  `a006-dot-dot-path-passthrough` (`/..` — no parent-dir rejection),
+  `a006-utf8-overlong-c0af` (`C0 AF` mid-host, rule=utf8-overlong).
+  Task 10 — byte-resolution sweep: `a006-ctrl-0x00` through
+  `a006-ctrl-0x1f` + `a006-ctrl-0x7f` (33 vectors, one per C0/DEL byte,
+  all at non-zero offset).
+
 - Round-8 review vectors (2026-04-27, 6 new entries, §5.4 inventory
   25 → 31): `malformed-domain-control-byte` (A-006 rule 6 reject),
   `well-formed-host-and-double-slash-path` (P-8 — `//x`),
@@ -120,6 +206,21 @@ with prefixed tags (`spec-v0.1.0`, `spec-v1.0.0`, ...).
   512-byte normative ceiling (253-octet RFC 1035 cap still rejected). §6.8
   amended with A-005 walkback note. §1.1 "no upper bound" text replaced with
   A-005 ceiling statement. frontmatter `amendment_log` records A-005.
+
+  ### Test Vectors (Story 7-1)
+  Task 2 — 4 ceiling-boundary vectors in `secret-format:` array:
+  `a005-domain-len-511` (511-byte host → PASS),
+  `a005-domain-len-512-with-trailing-slash` (511-byte host + `/` = 512-byte domain → PASS, A-006 P-16 intersection),
+  `a005-domain-len-513-reject` (513-byte domain → FAIL `MALFORMED` + `detail.rule="ceiling-exceeded"`),
+  `a005-domain-len-1024-reject` (1024-byte domain → FAIL same, no DoS amplification).
+  Task 10 — 2 additional byte-resolution boundary vectors:
+  `a005-domain-len-0-reject` (0-byte domain → FAIL MALFORMED via rule 1),
+  `a005-domain-len-1` (1-byte domain → PASS, minimum valid host).
+  New lib detail-code: `T3_ERR_DOMAIN_TOO_LONG = -17` added to `lib/include/t3.h`
+  (additive patch bump lib-v0.1.3). NOTE: wire-class remains `MALFORMED` per
+  §2.1 rule 3; the lib code is surfaced via `expect.detail.lib_code` as a
+  non-normative implementation hint.
+
 - Round-6 review editorial improvements (2026-04-26): §2.1 restructured
   with a normative validation-order block (INVALID_ARG checks first, then
   MALFORMED checks in order) and explicit `INVALID_ARG rejection rules` /
@@ -154,6 +255,17 @@ with prefixed tags (`spec-v0.1.0`, `spec-v1.0.0`, ...).
   `well-formed-host-and-deep-path`, `malformed-leading-slash`. §6.7 records
   rejected Variant B (separate URL `?path=` parameter). §6.8 records rejected
   Variant C (length-prefixed path).
+
+  ### Test Vectors (Story 7-1)
+  Task 1 — 7 vectors in `secret-format:` array covering all A-003 boundary conditions:
+  `a003-host-only` (host only, no `/`; `result.path=""`),
+  `a003-host-and-path` (host + `/path`; `result.host` + `result.path` populated),
+  `a003-trailing-slash` (`host + "/"` → `result.path="/"`),
+  `a003-leading-slash-reject` (`/host` → MALFORMED),
+  `a003-idn-host-only` (Punycode ASCII host; verbatim in `result.host`),
+  `a003-idn-host-and-path` (Punycode host + path),
+  `a003-double-slash-path` (`host//x`; path=`//x`, first-`/` split only).
+
 - Initial scaffold: reading order, RFC 2119 discipline, banner conventions.
 
 ### Changed
