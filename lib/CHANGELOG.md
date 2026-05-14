@@ -23,6 +23,24 @@ declares the `spec-vX.Y.Z` range it implements — see `VERSION`.
 Additive C API only — `t3_shim_open` signature unchanged. ABI patch bump
 will be applied at the next release tag.
 
+## [lib-v0.1.3] — 2026-05-12
+
+### Added
+- `T3_ERR_DOMAIN_TOO_LONG = -17` and `T3_ERR_INVALID_CONFIG = -18` added to
+  `t3_result_t` X-macro list in `t3.h`. Story 7-1 introduces these as
+  **internal detail-codes**, NOT new wire-error classes. Wire schema remains
+  the three-class set (`MALFORMED | INVALID_ARG | UNSUPPORTED_VERSION`).
+  Conformance vectors surface the detail via `expect.detail.lib_code`
+  (additive, non-normative implementation hint). Lib→wire mapping:
+  `T3_ERR_DOMAIN_TOO_LONG → MALFORMED`,
+  `T3_ERR_INVALID_CONFIG → INVALID_ARG`.
+  Additive — no existing value renumbered; consumers MUST treat unknown
+  negative values as `T3_ERR_INTERNAL` per ABI stability contract.
+
+### Stability note
+ABI additive patch — no existing enumerant value or function signature changed.
+`T3_ABI_VERSION_PATCH` bumped `2 → 3`.
+
 ## [lib-v0.1.2] — 2026-05-10
 
 ### Added

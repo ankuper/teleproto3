@@ -68,3 +68,38 @@ freshness) unstated. Round-8 party-mode resolved D1 by lifting
 formulae inline (§4.2 normative) rather than splitting derivation
 across spec + ERRATA, with this entry preserving the audit trail to
 the v1 reference and the design rationale that informed the choice.
+
+## E-002 — TOST supersedes Mann-Whitney for AR-C2
+
+- **Filed:** 2026-05-13 (Story 1-3a — §8 normative landing)
+- **Affects:** `spec/anti-probe.md` §8 + `_bmad-output/planning-artifacts/epics.md` AR-C2 bullet
+- **Status:** normative supersession
+
+**Scope.** The AR-C2 timing invariant was previously described in
+`epics.md` as "Mann-Whitney U over length-bucketed samples, p > 0.05".
+This phrasing is a style-guide §14.8 anti-pattern: using `p > 0.05
+fails to reject null` as evidence of independence. The absence of
+evidence is not evidence of absence — Mann-Whitney U cannot establish
+equivalence.
+
+**Supersession.** The normative AR-C2 test method is now defined in
+`spec/anti-probe.md` §8 (this story) as:
+
+- **TOST** (two one-sided tests) on length-bucket means with δ = 2 ms,
+  family-wise α = 0.05, Bonferroni-adjusted α_per_pair = 0.005 for the
+  10 pairwise tests across 5 canonical buckets ([0,63]/[64,255]/
+  [256,1023]/[1024,4095]/[4096,16383]).
+- **Spearman ρ** threshold: |ρ| < 0.1 over `(input_len, close_delay_ns)`,
+  asserted only when total N ≥ N_required.
+- **N_required** derived from pilot σ̂ via the TOST sample-size formula;
+  committed at `conformance/baselines/lib-v0.1.x/ar-c2-pilot.yaml`; safety
+  floor max(formula_result, 10 000).
+
+**Anti-pattern citation.** Style-guide §14.8 explicitly bans
+`p > 0.05 fails to reject null` as an evidence claim; use TOST (§12).
+Mann-Whitney U is explicitly rejected in `spec/anti-probe.md` §8.4
+forward reference to §11 Contested Decisions.
+
+**`epics.md` marker.** The AR-C2 bullet in `epics.md` carries an additive
+supersession marker per Story 1-3a AC #8; original phrasing is retained
+for audit-trail continuity.

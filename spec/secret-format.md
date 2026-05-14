@@ -417,13 +417,17 @@ parser's result against `expect`.
 **MUST** require every field declared `Required: yes` in the §5.2
 result schema (`result.key`, `result.domain`, `result.host`,
 `result.path`) to be present in the parser's output and byte-equal to
-the expected value. Missing required keys, mismatched values, or an
-output whose required-key set diverges from §5.2 are verification
-failures. An implementation that returns only `result.domain` and
-omits `result.host` / `result.path` is non-conformant. Extra fields
-not declared in §5.2 (e.g. implementation-internal diagnostics)
-**MUST NOT** cause verification failure provided every required field
-matches.
+the expected value. Optional fields (`result.query`, `result.fragment`,
+`result.extension_blob`) are compared only when the vector declares
+them; missing in observed output is acceptable when the vector does
+not declare a value, but a vector-declared value that mismatches the
+observed value is a verification failure. Missing required keys,
+mismatched values, or an output whose required-key set diverges from
+§5.2 are verification failures. An implementation that returns only
+`result.domain` and omits `result.host` / `result.path` is
+non-conformant. Extra fields not declared in §5.2 (e.g.
+implementation-internal diagnostics) **MUST NOT** cause verification
+failure provided every required field matches.
 
 ### 5.2 Result schema
 
@@ -435,7 +439,32 @@ On success (`expect.ok == true`):
 | `result.domain`        | string   | yes      | UTF-8 string copied verbatim from the parsed domain bytes (no normalisation, no escaping). Equals `host || path` (octet concatenation; see §1.1). Preserved for backward-compat with v0.1.0-draft consumers (see Consumer guidance below). |
 | `result.host`          | string   | yes      | UTF-8 string copied verbatim from the host portion of the domain (octets preceding the first `0x2f`, or the entire domain if no `0x2f` is present). Never empty. See §1.1. |
 | `result.path`          | string   | yes      | UTF-8 string copied verbatim from the path portion of the domain (octets from the first `0x2f` to end-of-buffer inclusive of the leading `/`, or the empty string if no `0x2f` is present). Empty (`""`) **MUST** mean "no `0x2f` octet present in `domain`"; otherwise `result.path` **MUST** begin with `/`. The two zero-segment states are distinct: `""` (no separator) vs `"/"` (single trailing slash); see §1.1. |
+| `result.query`         | string   | no       | UTF-8 octets following the first `0x3f` (`?`) in the host or path region, up to but excluding any subsequent `0x23` (`#`). Empty string (`""`) MUST mean "no `?` octet in domain". Producers MUST NOT emit `?` (A-007); consumers parse leniently (Postel) and route the suffix here so `result.host` and `result.path` remain DNS- and URL-clean by construction. |
+| `result.fragment`      | string   | no       | UTF-8 octets following the first `0x23` (`#`) in the host or path region. Empty string (`""`) MUST mean "no `#` octet in domain". Producers MUST NOT emit `#` (A-007); consumers parse leniently and route the suffix here. |
 | `result.extension_blob`| string   | no       | Lowercase hex of trailing octets after the v0.1.0 layout. Absent at v0.1.0; reserved for v0.2.0. |
+
+**A-007 split rule (NORMATIVE for consumers — A-010, 2026-05-12).**
+When a consumer encounters a literal `0x3f` (`?`) or `0x23` (`#`)
+octet inside `domain` — which is itself a producer-side spec violation
+under A-007 — the consumer **MUST** route the offending suffix into
+`result.query` (for `?`) and `result.fragment` (for `#`), keeping
+`result.host` and `result.path` byte-clean (containing only octets
+preceding the first `?`/`#`). The split rule:
+
+- The first `?` octet terminates `host` (if no `/` preceded it) or
+  `path` (if a `/` was seen). All octets between `?` and the first
+  subsequent `#` (or end-of-domain) are `result.query`.
+- The first `#` octet terminates whichever field is currently being
+  filled. All octets after `#` are `result.fragment`.
+- If neither `?` nor `#` is present, `result.query == ""` and
+  `result.fragment == ""`.
+
+This guarantees that callers consuming `result.host` for DNS or
+`result.path` for HTTP request-target construction never see bytes
+that the WHATWG URL standard would reject. The split is purely
+informational on the consumer side — round-trip serialisation
+through `t3_secret_serialise` still rejects (per A-007 producer
+rule) any non-empty `query` or `fragment`.
 
 **Consumer guidance.** New consumers **SHOULD** read `result.host`
 and `result.path` directly. The `result.domain` field is preserved
@@ -449,12 +478,16 @@ depends on which downstream layer consumes `domain` directly. See
 
 On failure (`expect.ok == false`):
 
-| Field           | Type     | Required | Description                                                          |
-|-----------------|----------|----------|----------------------------------------------------------------------|
-| `expect.error`  | string   | yes      | One of the spec-conformant classes: `MALFORMED`, `INVALID_ARG`, `UNSUPPORTED_VERSION`. |
+| Field                  | Type     | Required | Description                                                          |
+|------------------------|----------|----------|----------------------------------------------------------------------|
+| `expect.error`         | string   | yes      | One of the spec-conformant classes: `MALFORMED`, `INVALID_ARG`, `UNSUPPORTED_VERSION`. |
+| `expect.detail.rule`   | string   | no       | Non-normative discriminator naming the §2.1 rule that fires (e.g. `"ceiling-exceeded"`, `"control-byte"`, `"utf8-overlong"`). When present, conforming implementations that emit the same rule label MAY be cross-checked; absence is not a defect. |
+| `expect.detail.lib_code` | string | no       | Non-normative implementation hint identifying the lib-internal result code returned by the reference implementation (e.g. `"DOMAIN_TOO_LONG"`, `"INVALID_CONFIG"`). Third-party implementations MAY ignore. The wire-error class set above is closed; `lib_code` does NOT widen it. |
 
 Vectors **MUST NOT** assert `error: "INTERNAL"`. `INTERNAL` is
-implementation-reserved (§6).
+implementation-reserved (§6). Vectors **MUST NOT** introduce new
+`expect.error` values; any new diagnostic granularity is expressed
+via `expect.detail.*` keys.
 
 ### 5.3 XFAIL-PENDING-1.7
 

@@ -21,6 +21,15 @@ struct t3_secret {
     size_t   host_len;
     char    *path;
     size_t   path_len;
+    /* A-010 split rule (spec/secret-format.md §5.2): when the parsed
+     * domain contains literal '?' or '#' octets (a producer-side A-007
+     * violation that the consumer parses leniently), the suffixes are
+     * routed here so that `host` and `path` remain byte-clean. Both
+     * fields are always allocated; empty string means "no such octet". */
+    char    *query;
+    size_t   query_len;
+    char    *fragment;
+    size_t   fragment_len;
 };
 
 /* UTF-8 + C0/DEL validation (spec/secret-format.md §2.1 rules 5–6). */
@@ -101,6 +110,125 @@ T3_API t3_result_t t3_secret_parse(const uint8_t *buf, size_t len, t3_secret_t *
         memcpy(s->path, slash, path_len);
         s->path[path_len] = '\0';
     }
+
+    /* A-010 split: extract literal '?' / '#' suffixes from host/path so
+     * that downstream callers (DNS, HTTP Host: header, URL constructors)
+     * receive byte-clean strings. The first '?' terminates host (if no
+     * '/' had been seen, i.e. no path) or path; bytes between '?' and
+     * the first subsequent '#' become query; bytes after '#' become
+     * fragment. This is informational; the producer-side MUST-NOT-emit
+     * rule from A-007 is enforced in t3_secret_serialise. */
+    {
+        const char *host_q = (const char *)memchr(s->host, '?', s->host_len);
+        const char *host_f = (const char *)memchr(s->host, '#', s->host_len);
+        const char *path_q = NULL;
+        const char *path_f = NULL;
+        if (s->path_len > 0) {
+            path_q = (const char *)memchr(s->path, '?', s->path_len);
+            path_f = (const char *)memchr(s->path, '#', s->path_len);
+        }
+
+        /* If '?' or '#' appears in host, anything after it (including the
+         * existing path) belongs to query/fragment. Reconstruct from the
+         * original domain to capture cross-boundary suffix correctly. */
+        const char *first_special = NULL;
+        if (host_q && host_f)      first_special = (host_q < host_f) ? host_q : host_f;
+        else if (host_q)            first_special = host_q;
+        else if (host_f)            first_special = host_f;
+
+        if (first_special) {
+            /* Recompute clean host/path/query/fragment from domain. */
+            size_t clean_host_len = (size_t)(first_special - s->host);
+            /* Trailing bytes from this point forward live in domain. */
+            const char *suffix = s->domain + clean_host_len;
+            size_t suffix_len = s->domain_len - clean_host_len;
+            const char *q = (const char *)memchr(suffix, '?', suffix_len);
+            const char *f = (const char *)memchr(suffix, '#', suffix_len);
+            /* Truncate host. */
+            s->host_len = clean_host_len;
+            s->host[clean_host_len] = '\0';
+            /* No path when '?'/'#' appears in host region (no '/' before it). */
+            free(s->path);
+            s->path = (char *)malloc(1);
+            if (!s->path) { free(s->host); free(s->domain); free(s); return T3_ERR_INTERNAL; }
+            s->path[0] = '\0';
+            s->path_len = 0;
+            /* Split suffix into query (if '?' present) and fragment (if '#' present). */
+            const char *q_start = q ? q + 1 : NULL;
+            const char *f_start = f ? f + 1 : NULL;
+            size_t q_len = 0, f_len = 0;
+            if (q_start && f_start && f > q) {
+                q_len = (size_t)(f - q_start);
+                f_len = (size_t)((suffix + suffix_len) - f_start);
+            } else if (q_start) {
+                q_len = (size_t)((suffix + suffix_len) - q_start);
+            }
+            if (f_start && (!q_start || f < q)) {
+                f_len = (size_t)((suffix + suffix_len) - f_start);
+                q_len = 0;
+            }
+            s->query = (char *)malloc(q_len + 1);
+            if (!s->query) { free(s->path); free(s->host); free(s->domain); free(s); return T3_ERR_INTERNAL; }
+            if (q_len > 0 && q_start) memcpy(s->query, q_start, q_len);
+            s->query[q_len] = '\0';
+            s->query_len = q_len;
+            s->fragment = (char *)malloc(f_len + 1);
+            if (!s->fragment) { free(s->query); free(s->path); free(s->host); free(s->domain); free(s); return T3_ERR_INTERNAL; }
+            if (f_len > 0 && f_start) memcpy(s->fragment, f_start, f_len);
+            s->fragment[f_len] = '\0';
+            s->fragment_len = f_len;
+        } else if (path_q || path_f) {
+            /* '?' / '#' in path region — split path. */
+            const char *p_special;
+            if (path_q && path_f)   p_special = (path_q < path_f) ? path_q : path_f;
+            else if (path_q)        p_special = path_q;
+            else                    p_special = path_f;
+            size_t clean_path_len = (size_t)(p_special - s->path);
+            size_t path_consumed = clean_path_len;
+            s->path[clean_path_len] = '\0';
+            s->path_len = clean_path_len;
+            /* Compute tail bounds in the original domain buffer. */
+            size_t host_offset = s->host_len;
+            size_t tail_total = s->domain_len - host_offset - path_consumed;
+            const char *tail_start = s->domain + host_offset + path_consumed;
+            const char *q = (const char *)memchr(tail_start, '?', tail_total);
+            const char *f = (const char *)memchr(tail_start, '#', tail_total);
+            const char *q_start = q ? q + 1 : NULL;
+            const char *f_start = f ? f + 1 : NULL;
+            size_t q_len = 0, f_len = 0;
+            if (q_start && f_start && f > q) {
+                q_len = (size_t)(f - q_start);
+                f_len = (size_t)((tail_start + tail_total) - f_start);
+            } else if (q_start) {
+                q_len = (size_t)((tail_start + tail_total) - q_start);
+            }
+            if (f_start && (!q_start || f < q)) {
+                f_len = (size_t)((tail_start + tail_total) - f_start);
+                q_len = 0;
+            }
+            s->query = (char *)malloc(q_len + 1);
+            if (!s->query) { free(s->path); free(s->host); free(s->domain); free(s); return T3_ERR_INTERNAL; }
+            if (q_len > 0 && q_start) memcpy(s->query, q_start, q_len);
+            s->query[q_len] = '\0';
+            s->query_len = q_len;
+            s->fragment = (char *)malloc(f_len + 1);
+            if (!s->fragment) { free(s->query); free(s->path); free(s->host); free(s->domain); free(s); return T3_ERR_INTERNAL; }
+            if (f_len > 0 && f_start) memcpy(s->fragment, f_start, f_len);
+            s->fragment[f_len] = '\0';
+            s->fragment_len = f_len;
+        } else {
+            /* No '?' / '#' anywhere — empty query/fragment. */
+            s->query = (char *)malloc(1);
+            if (!s->query) { free(s->path); free(s->host); free(s->domain); free(s); return T3_ERR_INTERNAL; }
+            s->query[0] = '\0';
+            s->query_len = 0;
+            s->fragment = (char *)malloc(1);
+            if (!s->fragment) { free(s->query); free(s->path); free(s->host); free(s->domain); free(s); return T3_ERR_INTERNAL; }
+            s->fragment[0] = '\0';
+            s->fragment_len = 0;
+        }
+    }
+
     *out = s;
     return T3_OK;
 }
@@ -116,6 +244,8 @@ T3_API void t3_secret_free(t3_secret_t *s) {
     free(s->domain);
     free(s->host);
     free(s->path);
+    free(s->query);
+    free(s->fragment);
     memset(s, 0, sizeof(*s));
     free(s);
 }

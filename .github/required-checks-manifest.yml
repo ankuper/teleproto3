@@ -18,6 +18,7 @@ repos:
     checks:
       - identity-audit             # AR-G5 gate (Story 7-11)
       - verify-required-checks     # self-referential: verifier is also required
+      - conformance-timing         # AR-C2 timing-invariant gate (Story 7-2)
 
   - repo: ankuper/teleproto3-installer
     branch: main

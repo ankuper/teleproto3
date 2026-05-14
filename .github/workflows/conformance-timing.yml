@@ -1,0 +1,313 @@
+# conformance-timing.yml — AR-C2 timing-invariant CI gate (Story 7-2).
+#
+# Runs timing_invariant.py against the reference dispatcher on PRs touching
+# timing-critical paths. Posts idempotent PR comment on FAIL (sentinel
+# <!-- timing-invariant: <pr-sha> -->). Nightly cron uses N=100000.
+#
+# Required check: conformance-timing (enforced via required-checks-manifest.yml).
+# AR-G5 audit runs as a pre-job; main timing job depends on it.
+#
+# This is a reference CI gate for the Type3 anti-probe timing invariant.
+# spec/anti-probe.md §8 is normative. File a bug at the teleproto3 issue tracker.
+
+name: conformance-timing
+
+on:
+  pull_request:
+    paths:
+      - 'lib/src/timing.c'
+      - 'lib/src/header.c'
+      - 'server/net/net-type3-dispatch.c'
+      - 'lib/include/t3.h'
+  schedule:
+    - cron: '0 4 * * *'   # nightly 04:00 UTC — N=100000, broader regression
+
+# Minimal permissions: PR comment injection + issue creation for drift alerts.
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+# Serialise per-PR: cancel in-progress on new push; nightly runs never cancel.
+concurrency:
+  group: conformance-timing-${{ github.event.pull_request.number || 'nightly' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  # ------------------------------------------------------------------ #
+  # Job 1: AR-G5 identity audit (pre-job, required per Story 7-11).    #
+  # The timing job will not start if this fails.                        #
+  # ------------------------------------------------------------------ #
+  identity-audit:
+    name: AR-G5 identity audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Bootstrap checkout (for local action)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run identity audit
+        uses: ./.github/actions/identity-audit
+        with:
+          token-list-secret: ${{ secrets.IDENTITY_AUDIT_TOKEN_LIST_YAML }}
+
+  # ------------------------------------------------------------------ #
+  # Job 2: Timing invariant gate.                                       #
+  # ------------------------------------------------------------------ #
+  conformance-timing:
+    name: AR-C2 timing invariant
+    runs-on: ubuntu-latest
+    needs: [identity-audit]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y build-essential libssl-dev zlib1g-dev
+
+      - name: Build reference dispatcher
+        run: make -j$(nproc)
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'conformance/requirements.txt'
+
+      - name: Install Python dependencies
+        run: pip install -r conformance/requirements.txt
+
+      - name: Run timing invariant gate (PR mode, N=10000)
+        if: github.event_name == 'pull_request'
+        id: timing-pr
+        run: |
+          set +e
+          python3 conformance/gates/timing_invariant.py \
+            --impl objs/bin/mtproto-proxy \
+            --samples 10000 \
+            --output /tmp/timing-results.json \
+            --branch "${{ github.head_ref }}"
+          GATE_EXIT=$?
+          echo "gate_exit=${GATE_EXIT}" >> "$GITHUB_OUTPUT"
+          cat /tmp/timing-results.json || true
+          exit ${GATE_EXIT}
+        continue-on-error: true
+
+      - name: Run timing invariant gate (nightly, N=100000)
+        if: github.event_name == 'schedule'
+        id: timing-nightly
+        run: |
+          python3 conformance/gates/timing_invariant.py \
+            --impl objs/bin/mtproto-proxy \
+            --nightly \
+            --output /tmp/timing-results.json \
+            --branch main
+
+      - name: Upload timing results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timing-results-${{ github.run_id }}
+          path: /tmp/timing-results.json
+          if-no-files-found: warn
+
+      - name: Post PR comment on FAIL (idempotent)
+        if: >
+          github.event_name == 'pull_request' &&
+          steps.timing-pr.outputs.gate_exit != '0'
+        uses: actions/github-script@v7
+        env:
+          RESULTS_PATH: /tmp/timing-results.json
+        with:
+          script: |
+            const fs = require('fs');
+            const sha = context.payload.pull_request.head.sha;
+            const sentinel = `<!-- timing-invariant: ${sha} -->`;
+
+            // Read results JSON for summary.
+            let summary = '';
+            try {
+              const raw = fs.readFileSync(process.env.RESULTS_PATH, 'utf8');
+              const data = JSON.parse(raw);
+              summary = [
+                `| Metric | Value |`,
+                `|--------|-------|`,
+                `| Mann-Whitney p_min | ${data.p_mann_whitney_min?.toFixed(4) ?? 'n/a'} |`,
+                `| Spearman ρ | ${data.rho_spearman?.toFixed(4) ?? 'n/a'} |`,
+                `| Verdict | **${data.verdict ?? 'UNKNOWN'}** |`,
+                `| Samples | ${data.samples_total ?? 'n/a'} |`,
+                `| Runtime | ${data.runtime_ms ?? 'n/a'} ms |`,
+                `| Baseline drift | ${data.baseline_drift_pct?.toFixed(1) ?? '0.0'}% |`,
+              ].join('\n');
+            } catch (e) {
+              summary = `_(results unavailable: ${e.message})_`;
+            }
+
+            // Check if we already posted a non-stale comment for this SHA.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes(sentinel));
+            if (existing) {
+              console.log(`Skipping duplicate comment (sentinel present for ${sha})`);
+              return;
+            }
+
+            const body = [
+              sentinel,
+              `## ❌ AR-C2 Timing Invariant FAILED`,
+              ``,
+              `The timing-invariant gate detected a statistically significant`,
+              `correlation between input length and silent-close delay.`,
+              `This indicates a potential length-correlated timing side-channel`,
+              `that violates the AR-C2 anti-probe invariant.`,
+              ``,
+              summary,
+              ``,
+              `**Threshold:** p > 0.05 (Mann-Whitney) AND |ρ| < 0.1 (Spearman)`,
+              `**Spec:** \`spec/anti-probe.md §8\``,
+              ``,
+              `> A FAIL verdict on a shared CI runner may be a flake — the gate`,
+              `> already applies a 3-run majority vote for borderline p ∈ [0.04, 0.06].`,
+              `> If this is a persistent FAIL, investigate timing-correlated branching.`,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Post PR comment on PASS (only if previous run was FAIL)
+        if: >
+          github.event_name == 'pull_request' &&
+          steps.timing-pr.outputs.gate_exit == '0'
+        uses: actions/github-script@v7
+        env:
+          RESULTS_PATH: /tmp/timing-results.json
+        with:
+          script: |
+            const sha = context.payload.pull_request.head.sha;
+            const failSentinelPattern = '<!-- timing-invariant:';
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const priorFail = comments.find(
+              c => c.body.includes(failSentinelPattern) && !c.body.includes('✅')
+            );
+            if (!priorFail) {
+              console.log('No prior FAIL comment found; skipping PASS notification.');
+              return;
+            }
+
+            const sentinel = `<!-- timing-invariant: ${sha} -->`;
+            const fs = require('fs');
+            let rho = 'n/a', pMin = 'n/a';
+            try {
+              const data = JSON.parse(fs.readFileSync(process.env.RESULTS_PATH, 'utf8'));
+              rho = data.rho_spearman?.toFixed(4) ?? 'n/a';
+              pMin = data.p_mann_whitney_min?.toFixed(4) ?? 'n/a';
+            } catch (_) {}
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: [
+                sentinel,
+                `## ✅ AR-C2 Timing Invariant PASSED`,
+                ``,
+                `p_min=${pMin} · ρ=${rho} — no length-correlated timing detected.`,
+              ].join('\n'),
+            });
+
+      # pending-7-3: drift-alert issue creation activates once Story 7-3 has
+      # landed conformance/baselines/lib-v<tag>/<os>.yaml baselines.
+      # Until then, baseline_drift_pct == 0.0 so this step never fires.
+      - name: Create drift-alert issue on ≥5% baseline deviation (pending-7-3)
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          RESULTS_PATH: /tmp/timing-results.json
+          DRIFT_THRESHOLD: '5.0'
+        with:
+          script: |
+            const fs = require('fs');
+            let driftPct = 0;
+            let branch = context.ref;
+            try {
+              const data = JSON.parse(fs.readFileSync(process.env.RESULTS_PATH, 'utf8'));
+              driftPct = data.baseline_drift_pct ?? 0;
+              branch = process.env.GITHUB_HEAD_REF || context.ref;
+            } catch (_) { return; }
+
+            if (driftPct < parseFloat(process.env.DRIFT_THRESHOLD)) return;
+
+            // Post drift PR comment.
+            if (context.eventName === 'pull_request') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: `<!-- timing-baseline-drift: ${context.payload.pull_request.head.sha} -->\n` +
+                      `**timing-baseline-drift: ${driftPct.toFixed(1)}%** — ` +
+                      `p50/p95/p99 close-delay shifted ≥5% vs. prior tag baseline. ` +
+                      `Not a hard fail; operator review required.`,
+              });
+            }
+
+            // Open idempotent issue.
+            const sentinel = `<!-- timing-baseline-drift-issue: ${branch} -->`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'priority/regression',
+            });
+            const existing = issues.find(i => i.body?.includes(sentinel));
+            if (existing) { console.log(`Drift issue already open: #${existing.number}`); return; }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `priority/regression: timing baseline drift on ${branch}`,
+              labels: ['priority/regression'],
+              body: [
+                sentinel,
+                `## Timing Baseline Drift Detected`,
+                ``,
+                `Branch: \`${branch}\``,
+                `Drift: **${driftPct.toFixed(1)}%** (threshold: ${process.env.DRIFT_THRESHOLD}%)`,
+                ``,
+                `p50/p95/p99 silent-close delay shifted ≥5% from the prior tagged baseline.`,
+                `This is NOT a hard fail — a legitimate performance change may cause this.`,
+                `The operator should review and decide PASS/CONCERNS.`,
+                ``,
+                `Spec: \`spec/anti-probe.md §8\` · Gate: \`conformance/gates/timing_invariant.py\``,
+              ].join('\n'),
+            });
+
+      - name: Fail job if gate failed
+        if: >
+          github.event_name == 'pull_request' &&
+          steps.timing-pr.outputs.gate_exit != '0'
+        run: exit 1

@@ -1,0 +1,6 @@
+# conformance/requirements.txt — Python dependencies for conformance gates.
+# Add new gate dependencies here (additive; do not remove existing lines).
+
+# AR-C2 timing-invariant gate (conformance/gates/timing_invariant.py, Story 7-2):
+# Mann-Whitney U (scipy.stats.mannwhitneyu) and Spearman ρ (scipy.stats.spearmanr).
+scipy>=1.10.0

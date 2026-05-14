@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # verify.py — reads NDJSON from stdin, compares against unit.json vectors.
-# Companion to run.sh. Consumes only secret-format and session-header arrays
-# (style-guide §3 — wire-format key intentionally does not exist).
+# Companion to run.sh. Consumes the sections enumerated in _SECTIONS.
 #
 # Per-scenario output: one PASS/FAIL line on stdout.
 # Final line: markdown summary table (scenario id | level | result).
@@ -21,13 +20,19 @@ from typing import Any
 # Path to unit vectors relative to this script
 _VECTORS_PATH = pathlib.Path(__file__).parent.parent / "vectors" / "unit.json"
 
-# Sections to load — style-guide §3: only these two exist in unit.json.
-# Do NOT reference "wire-format" — that key intentionally does not exist.
-_SECTIONS = ("secret-format", "session-header")
+# Sections to load. Additive — new sections appended at the end.
+_SECTIONS = ("secret-format", "session-header", "kdf-cross-csprng")
+
+# Top-level metadata keys (not vector sections) that are tolerated in unit.json.
+_METADATA_KEYS = ("schema_version", "note")
 
 
 def _load_vectors() -> dict[str, dict[str, Any]]:
-    """Load unit.json and index vectors by (section, id)."""
+    """Load unit.json and index vectors by (section, id).
+
+    Fail-loud on unknown top-level sections — a typo or stray section is a
+    harness-setup error, not silently ignored.
+    """
     try:
         data = json.loads(_VECTORS_PATH.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -38,6 +43,19 @@ def _load_vectors() -> dict[str, dict[str, Any]]:
         sys.exit(2)
     except json.JSONDecodeError as exc:
         print(f"error: malformed vectors JSON: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+    unknown = [
+        k for k in data.keys()
+        if k not in _SECTIONS and k not in _METADATA_KEYS
+    ]
+    if unknown:
+        print(
+            f"error: unit.json contains unknown top-level keys {unknown!r}; "
+            f"add to _SECTIONS (vector section) or _METADATA_KEYS (metadata) "
+            f"or remove",
+            file=sys.stderr,
+        )
         sys.exit(2)
 
     index: dict[str, dict[str, Any]] = {}
@@ -64,6 +82,54 @@ def _hex_diff(expected: str, observed: str) -> str:
             diff_parts.append("… (truncated)")
             break
     return " | ".join(diff_parts) if diff_parts else "(no diff)"
+
+
+_RESULT_FIELDS_CHECKED = ("host", "path", "query", "fragment")
+
+
+def _compare_result_fields(
+    expected: dict[str, Any],
+    observed: dict[str, Any],
+) -> list[str]:
+    """Compare per-field result attributes. Missing observed field = skip
+    (runner may not emit every field); only mismatches are reported."""
+    mismatches: list[str] = []
+    for key in _RESULT_FIELDS_CHECKED:
+        if key not in expected:
+            continue
+        if key not in observed:
+            continue  # runner did not emit; treat as unenforced
+        if expected[key] != observed[key]:
+            mismatches.append(
+                f"{key}: expected {expected[key]!r}, observed {observed[key]!r}"
+            )
+    return mismatches
+
+
+def _compare_error(
+    expect_error: str,
+    expect_detail: dict[str, Any],
+    observed_error: str,
+    observed_detail: dict[str, Any],
+) -> list[str]:
+    """Compare wire-error class and detail discriminators. Missing observed
+    detail = skip (runner may not emit); only mismatches reported."""
+    mismatches: list[str] = []
+    if expect_error and observed_error and expect_error != observed_error:
+        mismatches.append(
+            f"error class: expected {expect_error!r}, observed {observed_error!r}"
+        )
+    for key in ("rule", "lib_code"):
+        if key not in expect_detail:
+            continue
+        if key not in observed_detail:
+            continue
+        if expect_detail[key] != observed_detail[key]:
+            mismatches.append(
+                f"detail.{key}: expected {expect_detail[key]!r}, "
+                f"observed {observed_detail[key]!r}"
+            )
+    return mismatches
 
 
 def main() -> int:
@@ -111,32 +177,60 @@ def main() -> int:
         level = section
         expect: dict[str, Any] = vec.get("expect", {})
         expect_ok: bool = expect.get("ok", False)
-        expect_result = expect.get("result")
+        expect_result: dict[str, Any] = expect.get("result") or {}
         expect_error: str = expect.get("error", "")
+        expect_detail: dict[str, Any] = expect.get("detail") or {}
+        expect_status: str = expect.get("expected_status", "")
 
-        # Compare observed hex against expected result
-        # For unit vectors, expected result is encoded in the vector's expect block.
-        # We trust the runner's reported result for protocol-level pass/fail,
-        # and additionally diff the hex payload when the vector carries an expected result hex.
+        observed_result: dict[str, Any] = rec.get("result_fields") or {}
+        observed_detail: dict[str, Any] = rec.get("detail_fields") or {}
+        observed_error: str = rec.get("error", "")
+
         runner_pass = (reported_result == "PASS")
 
+        # Pending-implementation vectors are reported as XFAIL — they are
+        # scaffolds for behaviour the reference IUT does not yet implement.
+        # Tracked under follow-up keys recorded in vec["follow_up"].
+        if expect_status == "pending-implementation":
+            follow_up = vec.get("follow_up", "")
+            tag = f" (follow_up={follow_up})" if follow_up else ""
+            print(f"XFAIL {scenario_id} (pending-implementation){tag}")
+            results.append((scenario_id, level, "XFAIL"))
+            continue
+
         if expect_ok and runner_pass:
-            # Both expect success and runner says pass — no hex diff available without IUT output
-            print(f"PASS {scenario_id}")
-            results.append((scenario_id, level, "PASS"))
+            mismatches = _compare_result_fields(expect_result, observed_result)
+            if mismatches:
+                print(
+                    f"FAIL {scenario_id}: result-field mismatch — "
+                    f"{'; '.join(mismatches)}"
+                )
+                fail_count += 1
+                results.append((scenario_id, level, "FAIL"))
+            else:
+                print(f"PASS {scenario_id}")
+                results.append((scenario_id, level, "PASS"))
         elif not expect_ok and not runner_pass:
-            # Both expect failure and runner says fail
-            print(f"PASS {scenario_id} (expected FAIL; IUT correctly rejected)")
-            results.append((scenario_id, level, "PASS"))
+            mismatches = _compare_error(
+                expect_error, expect_detail,
+                observed_error, observed_detail,
+            )
+            if mismatches:
+                print(
+                    f"FAIL {scenario_id}: rejected as expected but classification mismatch — "
+                    f"{'; '.join(mismatches)}"
+                )
+                fail_count += 1
+                results.append((scenario_id, level, "FAIL"))
+            else:
+                print(f"PASS {scenario_id} (expected FAIL; IUT correctly rejected)")
+                results.append((scenario_id, level, "PASS"))
         elif expect_ok and not runner_pass:
-            # Expected success but runner reported failure
             reason = detail if detail else "IUT rejected a valid input"
             print(f"FAIL {scenario_id}: expected ok=true but IUT returned FAIL — {reason}")
             fail_count += 1
             results.append((scenario_id, level, "FAIL"))
         else:
-            # Expected failure but runner reported pass
-            # Also check if observed hex is non-empty (byte-level diff)
             if observed_hex:
                 diff = _hex_diff("", observed_hex)
                 print(
@@ -154,15 +248,17 @@ def main() -> int:
     if results:
         total = len(results)
         passes = sum(1 for _, _, r in results if r == "PASS")
+        xfails = sum(1 for _, _, r in results if r == "XFAIL")
         summary_rows = "\n".join(
             f"| {sid} | {lvl} | {res} |"
             for sid, lvl, res in results
         )
+        xfail_tag = f"; {xfails} XFAIL" if xfails else ""
         print(
             f"\n| scenario | level | result |\n"
             f"|----------|-------|--------|\n"
             f"{summary_rows}\n"
-            f"**Summary:** {passes}/{total} PASS"
+            f"**Summary:** {passes}/{total} PASS{xfail_tag}"
         )
     else:
         print("**Summary:** 0/0 (no scenarios received)")

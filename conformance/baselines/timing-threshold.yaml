@@ -1,0 +1,58 @@
+# timing-threshold.yaml — AR-C2 normative gate thresholds for timing-invariant CI.
+#
+# This file is the authoritative source for statistical thresholds used by
+# conformance/gates/timing_invariant.py. Story 7-2, AC #2.
+# Cross-reference: spec/anti-probe.md §8 (AR-C2 normative wording).
+#
+# This is a reference artefact for the Type3 protocol conformance harness.
+# spec/ wins over this file. File a bug at the teleproto3 issue tracker.
+
+# ---- Mann-Whitney U threshold ----------------------------------------
+#
+# Type-I error budget: at alpha=0.05 we accept a 5% false-positive rate on
+# the independence test. A random, independent dataset will trigger a FAIL
+# verdict in 5% of runs — this is the designed CI flake rate before
+# flake-handling (AC #8) reduces it further via majority vote.
+#
+# The test is two-sided: we reject length-independence when the minimum
+# pairwise p-value across all 45 bucket-pairs drops below this threshold.
+mann_whitney_p_threshold: 0.05
+
+# ---- Spearman ρ threshold --------------------------------------------
+#
+# AR-C2 normative wording (spec/anti-probe.md §8): close-delay MUST be
+# independent of input length; |ρ| < 0.1 is the quantified bound. A value
+# of 0.1 corresponds to at most 1% explained variance (R² ≤ 0.01), well
+# below any operationally-significant timing correlation. Values 0.04–0.06
+# are in the flake band (AC #8); 0.1 is a hard threshold for Spearman.
+spearman_rho_threshold: 0.1
+
+# ---- Sample count ----------------------------------------------------
+#
+# Statistical-power calculation: with N=10000 and bucket_count=10 (1000
+# per bucket), Mann-Whitney detects a ≥5% mean-timing shift between any
+# two buckets at 80% power (two-sided, alpha=0.05, Cohen's d ≈ 0.06 for
+# typical close-delay distributions with σ ≈ 50ms). Below N=1000/bucket
+# the test is underpowered for subtle correlations. Nightly mode uses
+# N=100000 for higher sensitivity.
+samples_per_run: 10000
+
+# ---- Bucket configuration --------------------------------------------
+#
+# 10 logarithmically-spaced length classes from 1 to 65535 bytes (WS
+# 16-bit-length envelope). Logarithmic spacing ensures the lower end of
+# the WS payload range — where implementation branching is most likely —
+# is represented with fine-grained buckets.
+bucket_count: 10
+bucket_strategy: logarithmic
+bucket_lo_bytes: 1
+bucket_hi_bytes: 65535
+
+# ---- Drift alert threshold -------------------------------------------
+#
+# AR-C4 integration (Story 7-3): when the current run's p50/p95/p99
+# close-delay values differ from the prior tagged release baseline by
+# ≥5%, emit a visible PR comment and open an issue. This is NOT a hard
+# fail — a legitimate performance optimisation may shift the distribution.
+# The operator reviews the drift and decides PASS/CONCERNS.
+drift_threshold_pct: 5.0

@@ -1,38 +1,1448 @@
 {
   "schema_version": 1,
-  "note": "Conformance vectors for libteleproto3 v0.1.1. XFAIL-PENDING-1.7 status lifted. Epic 1a (W-003): T3_CMD_BENCH=0x04 added.",
+  "note": "Conformance vectors for libteleproto3 v0.1.1. XFAIL-PENDING-1.7 status lifted. Epic 1a (W-003): T3_CMD_BENCH=0x04 added. Story 7-1: A-003/A-005/A-006/A-007/A-009 vectors added; kdf-cross-csprng section added.",
   "session-header": [
-    {"id":"well-formed-v1","args":["01010000"],"expect":{"ok":true,"result":{"command_type":1,"version":1,"flags":0}}},
-    {"id":"reject-cmd-00","args":["00010000"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-cmd-ff","args":["ff010000"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-version-00","args":["01000000"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-flags-lo","args":["01010100"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-flags-hi","args":["01010001"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-cmd1-v2","args":["01020000"],"expect":{"ok":false,"error":"UNSUPPORTED_VERSION"}},
-    {"id":"reject-cmd1-vff","args":["01ff0000"],"expect":{"ok":false,"error":"UNSUPPORTED_VERSION"}},
-    {"id":"reject-cmd2-v1","args":["02010000"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-cmd2-v2","args":["02020000"],"expect":{"ok":false,"error":"UNSUPPORTED_VERSION"}},
-    {"id":"reject-cmdfe-v1","args":["fe010000"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-cmdfe-v2","args":["fe020000"],"expect":{"ok":false,"error":"UNSUPPORTED_VERSION"}},
-    {"id":"reject-all-zeros","args":["00000000"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-all-ff","args":["ffffffff"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-cmd0-nonzero-tail","args":["000000ff"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-nonzero-flags-both","args":["01010202"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-cmd03-reserved","args":["03010000"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"reject-cmd2-vff","args":["02ff0000"],"expect":{"ok":false,"error":"UNSUPPORTED_VERSION"}},
-    {"id":"reject-cmd02-sentinel-version","args":["020000ff"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"well-formed-bench","args":["04010000"],"expect":{"ok":true,"result":{"command_type":4,"version":1,"flags":0}}},
-    {"id":"bench-v2-unsupported","args":["04020000"],"expect":{"ok":false,"error":"UNSUPPORTED_VERSION"}},
-    {"id":"bench-vff-unsupported","args":["04ff0000"],"expect":{"ok":false,"error":"UNSUPPORTED_VERSION"}},
-    {"id":"bench-flags-nonzero","args":["04010100"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"bench-cmd-with-sentinel-version-rejected-via-generic-rule","args":["04000000"],"expect":{"ok":false,"error":"MALFORMED"}}
+    {
+      "id": "well-formed-v1",
+      "args": [
+        "01010000"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "command_type": 1,
+          "version": 1,
+          "flags": 0
+        }
+      }
+    },
+    {
+      "id": "reject-cmd-00",
+      "args": [
+        "00010000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-cmd-ff",
+      "args": [
+        "ff010000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-version-00",
+      "args": [
+        "01000000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-flags-lo",
+      "args": [
+        "01010100"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-flags-hi",
+      "args": [
+        "01010001"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-cmd1-v2",
+      "args": [
+        "01020000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "UNSUPPORTED_VERSION"
+      }
+    },
+    {
+      "id": "reject-cmd1-vff",
+      "args": [
+        "01ff0000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "UNSUPPORTED_VERSION"
+      }
+    },
+    {
+      "id": "reject-cmd2-v1",
+      "args": [
+        "02010000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-cmd2-v2",
+      "args": [
+        "02020000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "UNSUPPORTED_VERSION"
+      }
+    },
+    {
+      "id": "reject-cmdfe-v1",
+      "args": [
+        "fe010000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-cmdfe-v2",
+      "args": [
+        "fe020000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "UNSUPPORTED_VERSION"
+      }
+    },
+    {
+      "id": "reject-all-zeros",
+      "args": [
+        "00000000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-all-ff",
+      "args": [
+        "ffffffff"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-cmd0-nonzero-tail",
+      "args": [
+        "000000ff"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-nonzero-flags-both",
+      "args": [
+        "01010202"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-cmd03-reserved",
+      "args": [
+        "03010000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "reject-cmd2-vff",
+      "args": [
+        "02ff0000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "UNSUPPORTED_VERSION"
+      }
+    },
+    {
+      "id": "reject-cmd02-sentinel-version",
+      "args": [
+        "020000ff"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "well-formed-bench",
+      "args": [
+        "04010000"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "command_type": 4,
+          "version": 1,
+          "flags": 0
+        }
+      }
+    },
+    {
+      "id": "bench-v2-unsupported",
+      "args": [
+        "04020000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "UNSUPPORTED_VERSION"
+      }
+    },
+    {
+      "id": "bench-vff-unsupported",
+      "args": [
+        "04ff0000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "UNSUPPORTED_VERSION"
+      }
+    },
+    {
+      "id": "bench-flags-nonzero",
+      "args": [
+        "04010100"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "bench-cmd-with-sentinel-version-rejected-via-generic-rule",
+      "args": [
+        "04000000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    }
   ],
   "secret-format": [
-    {"id":"sf-well-formed-host","args":["ff000000000000000000000000000000006578616d706c652e636f6d"],"expect":{"ok":true}},
-    {"id":"sf-reject-wrong-marker","args":["fe000000000000000000000000000000006578616d706c652e636f6d"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"sf-reject-leading-slash","args":["ff000000000000000000000000000000002f6578616d706c652e636f6d"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"sf-reject-c0-control","args":["ff000000000000000000000000000000006578616d706c016f6d"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"sf-reject-del-in-domain","args":["ff000000000000000000000000000000006578617f706c652e636f6d"],"expect":{"ok":false,"error":"MALFORMED"}},
-    {"id":"sf-well-formed-with-path","args":["ff000000000000000000000000000000006578616d706c652e636f6d2f7773"],"expect":{"ok":true}}
+    {
+      "id": "sf-well-formed-host",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "sf-reject-wrong-marker",
+      "args": [
+        "fe000000000000000000000000000000006578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "sf-reject-leading-slash",
+      "args": [
+        "ff000000000000000000000000000000002f6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "sf-reject-c0-control",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c65016f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "sf-reject-del-in-domain",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c657f706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      }
+    },
+    {
+      "id": "sf-well-formed-with-path",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f7773"
+      ],
+      "expect": {
+        "ok": true
+      }
+    },
+    {
+      "id": "a003-host-only",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "example.com",
+          "path": ""
+        }
+      },
+      "amendment": "A-003",
+      "spec_section": "secret-format.md \u00a71.1",
+      "changelog_entry": "A-003"
+    },
+    {
+      "id": "a003-host-and-path",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f7773"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "example.com",
+          "path": "/ws"
+        }
+      },
+      "amendment": "A-003",
+      "spec_section": "secret-format.md \u00a71.1",
+      "changelog_entry": "A-003"
+    },
+    {
+      "id": "a003-trailing-slash",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "example.com",
+          "path": "/"
+        }
+      },
+      "amendment": "A-003",
+      "spec_section": "secret-format.md \u00a71.1",
+      "changelog_entry": "A-003"
+    },
+    {
+      "id": "a003-leading-slash-reject",
+      "args": [
+        "ff000000000000000000000000000000002f6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      },
+      "amendment": "A-003",
+      "spec_section": "secret-format.md \u00a72.1",
+      "changelog_entry": "A-003"
+    },
+    {
+      "id": "a003-idn-host-only",
+      "args": [
+        "ff00000000000000000000000000000000786e2d2d653161666d6170632e6578616d706c65"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "xn--e1afmapc.example",
+          "path": ""
+        }
+      },
+      "amendment": "A-003",
+      "spec_section": "secret-format.md \u00a71.1",
+      "changelog_entry": "A-003"
+    },
+    {
+      "id": "a003-idn-host-and-path",
+      "args": [
+        "ff00000000000000000000000000000000786e2d2d653161666d6170632e6578616d706c652f7631"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "xn--e1afmapc.example",
+          "path": "/v1"
+        }
+      },
+      "amendment": "A-003",
+      "spec_section": "secret-format.md \u00a71.1",
+      "changelog_entry": "A-003"
+    },
+    {
+      "id": "a003-double-slash-path",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f2f78"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "example.com",
+          "path": "//x"
+        }
+      },
+      "amendment": "A-003",
+      "spec_section": "secret-format.md \u00a71.1",
+      "changelog_entry": "A-003"
+    },
+    {
+      "id": "a005-domain-len-511",
+      "args": [
+        "ff0000000000000000000000000000000061616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+      ],
+      "expect": {
+        "ok": true
+      },
+      "amendment": "A-005",
+      "spec_section": "secret-format.md \u00a72.1 rule 3",
+      "changelog_entry": "A-005"
+    },
+    {
+      "id": "a005-domain-len-512-with-trailing-slash",
+      "args": [
+        "ff00000000000000000000000000000000616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612f"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "path": "/"
+        }
+      },
+      "amendment": "A-005",
+      "spec_section": "secret-format.md \u00a72.1 rule 3 + A-006 P-16",
+      "changelog_entry": "A-005"
+    },
+    {
+      "id": "a005-domain-len-513-reject",
+      "args": [
+        "ff00000000000000000000000000000000616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "ceiling-exceeded",
+          "lib_code": "DOMAIN_TOO_LONG"
+        }
+      },
+      "amendment": "A-005",
+      "spec_section": "secret-format.md \u00a72.1 rule 3",
+      "changelog_entry": "A-005"
+    },
+    {
+      "id": "a005-domain-len-1024-reject",
+      "args": [
+        "ff0000000000000000000000000000000061616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "ceiling-exceeded",
+          "lib_code": "DOMAIN_TOO_LONG"
+        }
+      },
+      "amendment": "A-005",
+      "spec_section": "secret-format.md \u00a72.1 rule 3",
+      "changelog_entry": "A-005"
+    },
+    {
+      "id": "a006-lf-reject",
+      "args": [
+        "ff0000000000000000000000000000000061610a6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006"
+    },
+    {
+      "id": "a006-cr-reject",
+      "args": [
+        "ff0000000000000000000000000000000061610d6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006"
+    },
+    {
+      "id": "a006-dot-path-passthrough",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f2e"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "example.com",
+          "path": "/."
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 P-8",
+      "changelog_entry": "A-006"
+    },
+    {
+      "id": "a006-dot-dot-path-passthrough",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f2e2e"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "example.com",
+          "path": "/.."
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 P-8",
+      "changelog_entry": "A-006"
+    },
+    {
+      "id": "a006-utf8-overlong-c0af",
+      "args": [
+        "ff000000000000000000000000000000006161c0af6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "utf8-overlong"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 5",
+      "changelog_entry": "A-006"
+    },
+    {
+      "id": "a007-host-with-query",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e696e76616c69643f713d31"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "example.invalid",
+          "path": "",
+          "query": "q=1",
+          "fragment": ""
+        }
+      },
+      "amendment": "A-007",
+      "spec_section": "secret-format.md \u00a75.2 A-007 split rule (A-010)",
+      "changelog_entry": "A-007",
+      "note": "Producer MUST reject; consumer accepts and routes `?q=1` suffix into result.query (A-010 split rule). Host stays DNS-clean. Host TLD .invalid per RFC 2606 \u00a72."
+    },
+    {
+      "id": "a007-host-with-fragment",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e696e76616c69642366726167"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "example.invalid",
+          "path": "",
+          "query": "",
+          "fragment": "frag"
+        }
+      },
+      "amendment": "A-007",
+      "spec_section": "secret-format.md \u00a75.2 A-007 split rule (A-010)",
+      "changelog_entry": "A-007",
+      "note": "Producer MUST reject; consumer accepts and routes `#frag` suffix into result.fragment (A-010 split rule). Host stays DNS-clean. Host TLD .invalid per RFC 2606 \u00a72."
+    },
+    {
+      "id": "a007-path-with-query",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e696e76616c69642f703f713d31"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "example.invalid",
+          "path": "/p",
+          "query": "q=1",
+          "fragment": ""
+        }
+      },
+      "amendment": "A-007",
+      "spec_section": "secret-format.md \u00a75.2 A-007 split rule (A-010)",
+      "changelog_entry": "A-007",
+      "note": "Producer MUST reject; consumer accepts and routes `?q=1` suffix into result.query (A-010 split rule)."
+    },
+    {
+      "id": "a007-path-with-fragment",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e696e76616c69642f702366726167"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "example.invalid",
+          "path": "/p",
+          "query": "",
+          "fragment": "frag"
+        }
+      },
+      "amendment": "A-007",
+      "spec_section": "secret-format.md \u00a75.2 A-007 split rule (A-010)",
+      "changelog_entry": "A-007",
+      "note": "Producer MUST reject; consumer accepts and routes `#frag` suffix into result.fragment (A-010 split rule)."
+    },
+    {
+      "id": "a007-path-with-percent-encoded-query",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e696e76616c69642f25334671"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "example.invalid",
+          "path": "/%3Fq"
+        }
+      },
+      "amendment": "A-007",
+      "spec_section": "secret-format.md \u00a72.1 producer-rules",
+      "changelog_entry": "A-007"
+    },
+    {
+      "id": "a005-domain-len-0-reject",
+      "args": [
+        "ff00000000000000000000000000000000"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      },
+      "amendment": "A-005",
+      "spec_section": "secret-format.md \u00a72.1 rule 1 (len<18)",
+      "changelog_entry": "A-005",
+      "note": "AC#9: zero-byte domain \u2192 total_len=17 \u2192 MALFORMED"
+    },
+    {
+      "id": "a005-domain-len-1",
+      "args": [
+        "ff0000000000000000000000000000000061"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "a",
+          "path": ""
+        }
+      },
+      "amendment": "A-005",
+      "spec_section": "secret-format.md \u00a72.1 rule 1",
+      "changelog_entry": "A-005",
+      "note": "AC#9: one-byte domain 'a' \u2192 minimum valid synthetic host"
+    },
+    {
+      "id": "a006-ctrl-0x00",
+      "args": [
+        "ff000000000000000000000000000000006161006578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x00 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x01",
+      "args": [
+        "ff000000000000000000000000000000006161016578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x01 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x02",
+      "args": [
+        "ff000000000000000000000000000000006161026578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x02 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x03",
+      "args": [
+        "ff000000000000000000000000000000006161036578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x03 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x04",
+      "args": [
+        "ff000000000000000000000000000000006161046578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x04 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x05",
+      "args": [
+        "ff000000000000000000000000000000006161056578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x05 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x06",
+      "args": [
+        "ff000000000000000000000000000000006161066578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x06 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x07",
+      "args": [
+        "ff000000000000000000000000000000006161076578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x07 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x08",
+      "args": [
+        "ff000000000000000000000000000000006161086578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x08 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x09",
+      "args": [
+        "ff000000000000000000000000000000006161096578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x09 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x0a",
+      "args": [
+        "ff0000000000000000000000000000000061610a6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x0a at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x0b",
+      "args": [
+        "ff0000000000000000000000000000000061610b6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x0b at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x0c",
+      "args": [
+        "ff0000000000000000000000000000000061610c6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x0c at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x0d",
+      "args": [
+        "ff0000000000000000000000000000000061610d6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x0d at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x0e",
+      "args": [
+        "ff0000000000000000000000000000000061610e6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x0e at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x0f",
+      "args": [
+        "ff0000000000000000000000000000000061610f6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x0f at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x10",
+      "args": [
+        "ff000000000000000000000000000000006161106578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x10 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x11",
+      "args": [
+        "ff000000000000000000000000000000006161116578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x11 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x12",
+      "args": [
+        "ff000000000000000000000000000000006161126578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x12 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x13",
+      "args": [
+        "ff000000000000000000000000000000006161136578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x13 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x14",
+      "args": [
+        "ff000000000000000000000000000000006161146578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x14 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x15",
+      "args": [
+        "ff000000000000000000000000000000006161156578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x15 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x16",
+      "args": [
+        "ff000000000000000000000000000000006161166578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x16 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x17",
+      "args": [
+        "ff000000000000000000000000000000006161176578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x17 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x18",
+      "args": [
+        "ff000000000000000000000000000000006161186578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x18 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x19",
+      "args": [
+        "ff000000000000000000000000000000006161196578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x19 at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x1a",
+      "args": [
+        "ff0000000000000000000000000000000061611a6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x1a at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x1b",
+      "args": [
+        "ff0000000000000000000000000000000061611b6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x1b at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x1c",
+      "args": [
+        "ff0000000000000000000000000000000061611c6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x1c at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x1d",
+      "args": [
+        "ff0000000000000000000000000000000061611d6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x1d at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x1e",
+      "args": [
+        "ff0000000000000000000000000000000061611e6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x1e at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x1f",
+      "args": [
+        "ff0000000000000000000000000000000061611f6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x1f at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a006-ctrl-0x7f",
+      "args": [
+        "ff0000000000000000000000000000000061617f6578616d706c652e636f6d"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "AC#9 byte-resolution sweep: byte 0x7f at non-zero offset (offset 2)"
+    },
+    {
+      "id": "a005-domain-len-512-host-only",
+      "args": [
+        "ff00000000000000000000000000000000616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "path": ""
+        }
+      },
+      "amendment": "A-005",
+      "spec_section": "secret-format.md \u00a72.1 rule 3",
+      "changelog_entry": "A-005",
+      "note": "Boundary: exactly 512-byte host with no path; A-005 ceiling PASS pure-host form (sister of a005-domain-len-512-with-trailing-slash)"
+    },
+    {
+      "id": "a005-domain-len-512-octets-multibyte-utf8",
+      "args": [
+        "ff00000000000000000000000000000000c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5\u00b5",
+          "path": ""
+        }
+      },
+      "amendment": "A-005",
+      "spec_section": "secret-format.md \u00a72.1 rule 3",
+      "changelog_entry": "A-005",
+      "note": "Octet-vs-codepoint: 256 \u00d7 U+00B5 (each 2 octets in UTF-8) = 512 octets PASS. Locks octet-counter semantics; a codepoint-counter parser would mis-PASS at 257 \u00d7 U+00B5 (514 octets)"
+    },
+    {
+      "id": "a005-domain-len-514-octets-multibyte-utf8-reject",
+      "args": [
+        "ff00000000000000000000000000000000c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5c2b5"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "ceiling-exceeded",
+          "lib_code": "DOMAIN_TOO_LONG"
+        }
+      },
+      "amendment": "A-005",
+      "spec_section": "secret-format.md \u00a72.1 rule 3",
+      "changelog_entry": "A-005",
+      "note": "Octet-vs-codepoint reject: 257 \u00d7 U+00B5 = 514 octets > 512 ceiling. A codepoint-counter parser would mis-PASS at 257 codepoints"
+    },
+    {
+      "id": "a003-single-slash-reject",
+      "args": [
+        "ff000000000000000000000000000000002f"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "leading-slash"
+        }
+      },
+      "amendment": "A-003",
+      "spec_section": "secret-format.md \u00a72.1 rule 4",
+      "changelog_entry": "A-003",
+      "note": "Minimum-size leading-slash: domain = single 0x2f octet, total_len = 18 (passes rule 1 len\u22652), rule 4 fires"
+    },
+    {
+      "id": "a006-lf-in-path-reject",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f0a78"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "Path-position control byte: rule 6 covers buf[17..len-1] including path region; offset 28 (post-slash)"
+    },
+    {
+      "id": "a006-nul-in-path-reject",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f0078"
+      ],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "control-byte"
+        }
+      },
+      "amendment": "A-006",
+      "spec_section": "secret-format.md \u00a72.1 rule 6",
+      "changelog_entry": "A-006",
+      "note": "Path-position NUL byte: rule 6 fires on 0x00 in path region"
+    }
+  ],
+  "kdf-cross-csprng": [
+    {
+      "id": "kdf-csprng-backend-none",
+      "args": [
+        "00000000000000000000000000000000",
+        "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40"
+      ],
+      "config": {
+        "T3_CSPRNG_BACKEND": "none"
+      },
+      "expect": {
+        "ok": true,
+        "expected_status": "pending-implementation",
+        "follow_up": "7-1-A"
+      },
+      "amendment": "A-009",
+      "spec_section": "wire-format.md \u00a74.2 + lib/include/t3_platform.h",
+      "changelog_entry": "A-009",
+      "note": "KDF output MUST be byte-identical regardless of CSPRNG backend. Expected bytes pending Linux reference-impl run."
+    },
+    {
+      "id": "kdf-csprng-backend-linux-getrandom",
+      "args": [
+        "00000000000000000000000000000000",
+        "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40"
+      ],
+      "config": {
+        "T3_CSPRNG_BACKEND": "linux_getrandom"
+      },
+      "expect": {
+        "ok": true,
+        "expected_status": "pending-implementation",
+        "follow_up": "7-1-A"
+      },
+      "amendment": "A-009",
+      "spec_section": "wire-format.md \u00a74.2 + lib/include/t3_platform.h",
+      "changelog_entry": "A-009"
+    },
+    {
+      "id": "kdf-csprng-backend-macos-secrandom",
+      "args": [
+        "00000000000000000000000000000000",
+        "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40"
+      ],
+      "config": {
+        "T3_CSPRNG_BACKEND": "macos_secrandom"
+      },
+      "expect": {
+        "ok": true,
+        "expected_status": "pending-implementation",
+        "follow_up": "7-1-A"
+      },
+      "amendment": "A-009",
+      "spec_section": "wire-format.md \u00a74.2 + lib/include/t3_platform.h",
+      "changelog_entry": "A-009"
+    },
+    {
+      "id": "kdf-csprng-backend-windows-bcrypt",
+      "args": [
+        "00000000000000000000000000000000",
+        "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40"
+      ],
+      "config": {
+        "T3_CSPRNG_BACKEND": "windows_bcrypt"
+      },
+      "expect": {
+        "ok": true,
+        "expected_status": "pending-implementation",
+        "follow_up": "7-1-A"
+      },
+      "amendment": "A-009",
+      "spec_section": "wire-format.md \u00a74.2 + lib/include/t3_platform.h",
+      "changelog_entry": "A-009"
+    },
+    {
+      "id": "kdf-csprng-backend-invalid-value",
+      "args": [
+        "00000000000000000000000000000000",
+        "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40"
+      ],
+      "config": {
+        "T3_CSPRNG_BACKEND": "invalid_value"
+      },
+      "expect": {
+        "ok": false,
+        "error": "INVALID_ARG",
+        "detail": {
+          "lib_code": "INVALID_CONFIG"
+        }
+      },
+      "amendment": "A-009",
+      "spec_section": "wire-format.md \u00a74.2 + lib/include/t3_platform.h",
+      "changelog_entry": "A-009",
+      "note": "t3_init() MUST return T3_ERR_INVALID_CONFIG (lib detail-code) for unrecognised CSPRNG backend value; wire class is INVALID_ARG per spec/secret-format.md \u00a75 closed set"
+    }
   ]
 }

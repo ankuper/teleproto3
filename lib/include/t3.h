@@ -57,11 +57,11 @@ extern "C" {
 
 #define T3_LIB_VERSION_MAJOR 0
 #define T3_LIB_VERSION_MINOR 1
-#define T3_LIB_VERSION_PATCH 2
+#define T3_LIB_VERSION_PATCH 3
 
 #define T3_ABI_VERSION_MAJOR 0
 #define T3_ABI_VERSION_MINOR 1
-#define T3_ABI_VERSION_PATCH 2
+#define T3_ABI_VERSION_PATCH 3
 
 /* MSVC's C++ frontend doesn't accept the C11 _Static_assert keyword. Pick the
    right keyword per language: static_assert in C++11+, _Static_assert in C11+,
@@ -93,6 +93,17 @@ T3_STATIC_ASSERT(T3_ABI_VERSION_MAJOR >= 0 && T3_ABI_VERSION_MINOR >= 0 && T3_AB
 
 /* --------------------------------------------------------------------
  * Result codes — X-macro source of truth (PR2 / D2 resolution)
+ *
+ * lib→wire error mapping (Story 7-1):
+ * The wire-error class set in spec/secret-format.md §5 is closed at three
+ * values: {MALFORMED, INVALID_ARG, UNSUPPORTED_VERSION}. The lib-internal
+ * t3_result_t enum is granular for diagnostics, metrics, and producer-side
+ * UX. Conformance vectors carry the lib code as a non-normative hint via
+ * expect.detail.lib_code; third-party implementations MAY ignore the hint.
+ *
+ *   T3_ERR_DOMAIN_TOO_LONG  → wire MALFORMED (rule "ceiling-exceeded")
+ *   T3_ERR_INVALID_CONFIG   → wire INVALID_ARG
+ *   (All other T3_ERR_* map per spec/secret-format.md §2.1 rule table)
  * -------------------------------------------------------------------- */
 #define T3_RESULT_LIST(X)                                                                          \
     X(T3_OK,                              0, "ok")                                                 \
@@ -111,6 +122,8 @@ T3_STATIC_ASSERT(T3_ABI_VERSION_MAJOR >= 0 && T3_ABI_VERSION_MINOR >= 0 && T3_AB
     X(T3_ERR_PATH_PERCENT_ENCODED,      -14, "path contains percent-encoded octets")               \
     X(T3_ERR_PATH_EMPTY_SEGMENT,        -15, "path contains an empty segment ('//')")              \
     X(T3_ERR_PATH_NON_ASCII,            -16, "path contains non-ASCII characters (rejected at v0.1.0)") \
+    X(T3_ERR_DOMAIN_TOO_LONG,           -17, "domain field exceeds 512-byte ceiling (A-005)")           \
+    X(T3_ERR_INVALID_CONFIG,            -18, "invalid configuration value (A-009)")                    \
     X(T3_ERR_INTERNAL,                  -99, "internal error")
 
 #define T3_RESULT_ENUM_ENTRY(name, value, msg) name = value,
