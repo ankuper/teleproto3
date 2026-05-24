@@ -1,6 +1,6 @@
 ---
 spec_version: 0.1.0-draft
-last_updated: 2026-04-26
+last_updated: 2026-05-23
 status: draft
 amendment_log:
   - id: A-003
@@ -15,6 +15,9 @@ amendment_log:
   - id: A-006
     date: 2026-04-27
     summary: Round-8 review fold-in — §2.1 MALFORMED rule 6 (reject C0 control / DEL octets) closes wire-layer HTTP-injection surface; coverage gap vectors for `//`, `/.`, `/..`, mid-host UTF-8, 511-byte boundary
+  - id: A-012
+    date: 2026-05-23
+    summary: Transport Mode in Secret Format — query-parameter ?t=<mode> split and extraction (§1, §1.1, §2.4, §3, §5.2, §6.9)
 ---
 
 > **Normative.** This document defines required behaviour for conforming
@@ -64,6 +67,8 @@ canonicalise, normalise (NFC/IDNA), case-fold, or otherwise transform
 domain bytes during serialisation. Parsers **SHOULD** preserve raw
 domain bytes verbatim (see §2).
 
+**Amendment A-012 (2026-05-23):** The `domain` field may contain transport parameters encoded as a query string (specifically, a `?t=<mode>` parameter) appended to the path. This query string does not change the physical octet layout of the secret; the `?t=<mode>` bytes are simply treated as part of the raw `domain` field at the layout level.
+
 `domain_len` is derived from the buffer length: `domain_len = total_len
 - 17`. There is no separate length field. There is no terminator.
 This identity is computed only after §2.1 rule 1 is satisfied (i.e.,
@@ -111,7 +116,20 @@ keys) **SHOULD** do so above the parser layer; the parser
 preserves the distinction.
 
 The identity `domain == host || path` (octet concatenation) holds
-for every well-formed secret; parsers **MUST** preserve it.
+for every well-formed secret containing no query or fragment parameters;
+parsers **MUST** preserve it. For secrets carrying transport parameters
+(A-012), the extended identity is `domain == host || path || "?" || query`
+(where `path` may be the empty string when no `0x2f` octet is present).
+
+**Amendment A-012 (2026-05-23):** After the initial `host`/`path` split based on the first `0x2f` octet, the parser scans **both** the resulting `host` (when no `/` was found) and the resulting `path` (when a `/` was found) for the first `0x3f` (`?`) octet:
+
+- **If a `/` was present and `?` appears in `path`:**
+  - The final `result.path` consists only of the octets preceding the first `?`.
+  - The octets following `?` (up to a subsequent `#`) form the query string, routed to `result.query` per the A-010 split rule in §5.2.
+  - The transport mode is extracted from this query string per §2.4.
+- **If no `/` was present and `?` appears in `host`:**
+  - This is a normatively permitted form under A-012 (the reference implementation accepts it; see §6.9). The host is truncated at the `?`; the suffix is routed to `result.query`; `result.path` is `""`. Transport mode extraction per §2.4 applies.
+- **If no `?` is found anywhere:** `result.query` is `""` and no transport mode extraction is performed (defaults to `T3_TRANSPORT_WS`).
 
 Both `host` and `path` octets are preserved verbatim. Producers and
 parsers **MUST NOT** apply percent-encoding, percent-decoding,
@@ -251,6 +269,18 @@ future-version marker is established, is governed normatively by §4.
 - **`INVALID_ARG`** — `NULL` output pointer or `NULL` input with
   positive length.
 
+### 2.4 Transport mode extraction
+
+**Amendment A-012 (2026-05-23).** Transport mode extraction is performed **after** the A-010 `?`/`#` split (§5.2) has been fully applied — i.e. `result.query` already contains only the bytes between the first `?` and the first subsequent `#` (or end of domain). The extraction rules are:
+
+1. If `result.query` is empty or does not start with the lowercase ASCII prefix `t=`, the transport mode defaults to `T3_TRANSPORT_WS` (integer value `0`).
+2. If `result.query` starts with `t=`, the parser **MUST** extract the decimal integer value following the `t=` prefix, up to the next `&` separator or end of string. The value **MUST** be interpreted as a base-10 unsigned integer without leading zeros; leading zeros (e.g. `t=01`) and non-decimal formats (e.g. `t=0x1`) are treated as unknown and default to `T3_TRANSPORT_WS`. The parameter key `t` is **case-sensitive**; `T=1` does not match and defaults to `T3_TRANSPORT_WS`.
+3. The normative transport mode values are:
+   - `0` = `T3_TRANSPORT_WS` (WebSocket stream)
+   - `1` = `T3_TRANSPORT_HTTP_STREAM` (HTTP stream)
+4. If the value string is empty (e.g. `?t=` or `?t=&p=1`), the transport mode defaults to `T3_TRANSPORT_WS`.
+5. If the extracted value is a valid decimal integer but encodes an unrecognised mode (e.g. `t=99`), the behaviour is implementation-specific. Conforming parsers **SHOULD** accept the secret, treat the transport mode as `T3_TRANSPORT_WS`, and **MAY** surface a warning.
+
 §4 introduces:
 
 - **`UNSUPPORTED_VERSION`** — emitted **only** when a parser encounters
@@ -294,6 +324,8 @@ plus §2.1's leading-`0x2f` rejection, an empty `host` would force
 `domain` to begin with `0x2f` (when `path` is non-empty) and §2.1
 rejects such buffers as `MALFORMED`. When the source has no host,
 the secret is not well-formed and **MUST NOT** be serialised.
+
+**Amendment A-012 (2026-05-23):** Conforming producers **MAY** emit the query parameter `?t=<mode>` in the path component of the domain (yielding a path of the form `/path?t=<mode>`). This is the only permitted use of a literal `0x3f` (`?`) octet in a Type3 secret, narrowing the blanket prohibition established by A-007. Producers **MUST NOT** emit a literal `0x23` (`#`) or any other use of `0x3f` (`?`) in any component of the secret.
 
 ### 3.1 Round-trip property
 
@@ -436,17 +468,19 @@ On success (`expect.ok == true`):
 | Field                  | Type     | Required | Description                                                                                  |
 |------------------------|----------|----------|----------------------------------------------------------------------------------------------|
 | `result.key`           | string   | yes      | **MUST** be exactly 32 lowercase hex characters (digits `0`–`9`, letters `a`–`f`; 16 raw key octets). Uppercase hex, wrong length, or non-hex characters are conformance failures. |
-| `result.domain`        | string   | yes      | UTF-8 string copied verbatim from the parsed domain bytes (no normalisation, no escaping). Equals `host || path` (octet concatenation; see §1.1). Preserved for backward-compat with v0.1.0-draft consumers (see Consumer guidance below). |
+| `result.domain`        | string   | yes      | UTF-8 string copied verbatim from the parsed domain bytes (no normalisation, no escaping). Equals `host || path` for secrets without transport parameters; equals `host || path || "?" || query` for secrets carrying A-012 transport parameters (see §1.1). Preserved for backward-compat with v0.1.0-draft consumers (see Consumer guidance below). |
 | `result.host`          | string   | yes      | UTF-8 string copied verbatim from the host portion of the domain (octets preceding the first `0x2f`, or the entire domain if no `0x2f` is present). Never empty. See §1.1. |
 | `result.path`          | string   | yes      | UTF-8 string copied verbatim from the path portion of the domain (octets from the first `0x2f` to end-of-buffer inclusive of the leading `/`, or the empty string if no `0x2f` is present). Empty (`""`) **MUST** mean "no `0x2f` octet present in `domain`"; otherwise `result.path` **MUST** begin with `/`. The two zero-segment states are distinct: `""` (no separator) vs `"/"` (single trailing slash); see §1.1. |
-| `result.query`         | string   | no       | UTF-8 octets following the first `0x3f` (`?`) in the host or path region, up to but excluding any subsequent `0x23` (`#`). Empty string (`""`) MUST mean "no `?` octet in domain". Producers MUST NOT emit `?` (A-007); consumers parse leniently (Postel) and route the suffix here so `result.host` and `result.path` remain DNS- and URL-clean by construction. |
+| `result.query`         | string   | no       | UTF-8 octets following the first `0x3f` (`?`) in the host or path region, up to but excluding any subsequent `0x23` (`#`). Empty string (`""`) MUST mean "no `?` octet in domain". Producers MUST NOT emit `?` (A-007) EXCEPT for transport parameters (`?t=<mode>`) per A-012; consumers parse leniently (Postel) and route the suffix here so `result.host` and `result.path` remain DNS- and URL-clean by construction. |
 | `result.fragment`      | string   | no       | UTF-8 octets following the first `0x23` (`#`) in the host or path region. Empty string (`""`) MUST mean "no `#` octet in domain". Producers MUST NOT emit `#` (A-007); consumers parse leniently and route the suffix here. |
+| `result.transport_mode` | integer  | no       | **OPTIONAL.** The derived semantic transport mode extracted from `result.query` per §2.4 (0 = `T3_TRANSPORT_WS`, 1 = `T3_TRANSPORT_HTTP_STREAM`). Defaults to `0` when absent. Unlike `result.query`, this field represents the derived integer mode rather than the raw query string bytes. |
 | `result.extension_blob`| string   | no       | Lowercase hex of trailing octets after the v0.1.0 layout. Absent at v0.1.0; reserved for v0.2.0. |
 
-**A-007 split rule (NORMATIVE for consumers — A-010, 2026-05-12).**
+**A-007 split rule (NORMATIVE for consumers — A-010, 2026-05-12; amended by A-012, 2026-05-23).**
 When a consumer encounters a literal `0x3f` (`?`) or `0x23` (`#`)
-octet inside `domain` — which is itself a producer-side spec violation
-under A-007 — the consumer **MUST** route the offending suffix into
+octet inside `domain` — which is a producer-side spec violation
+under A-007 unless it represents a transport parameter `?t=<mode>` per A-012 —
+the consumer **MUST** route the query suffix into
 `result.query` (for `?`) and `result.fragment` (for `#`), keeping
 `result.host` and `result.path` byte-clean (containing only octets
 preceding the first `?`/`#`). The split rule:
@@ -464,7 +498,8 @@ This guarantees that callers consuming `result.host` for DNS or
 that the WHATWG URL standard would reject. The split is purely
 informational on the consumer side — round-trip serialisation
 through `t3_secret_serialise` still rejects (per A-007 producer
-rule) any non-empty `query` or `fragment`.
+rule) any non-empty `query` or `fragment` EXCEPT for transport
+parameters (`?t=<mode>`) conforming to A-012.
 
 **Consumer guidance.** New consumers **SHOULD** read `result.host`
 and `result.path` directly. The `result.domain` field is preserved
@@ -501,7 +536,7 @@ the runner.
 
 ### 5.4 Vector inventory
 
-The `secret-format` array contains 31 vectors at v0.1.0 (11 baseline +
+The `secret-format` array in `unit.json` contains **31 vectors** (11 baseline +
 5 destination-structure vectors added by amendment A-003 + 6 vectors
 added by Round-6 review: 3 invalid-UTF-8, 2 A-005 domain-ceiling,
 1 forward-compat tolerance + 3 vectors added by Round-7 review:
@@ -509,7 +544,11 @@ added by Round-6 review: 3 invalid-UTF-8, 2 A-005 domain-ceiling,
 reject, 1 multi-byte-UTF-8-path accept + 6 vectors added by Round-8
 review (A-006): 1 control-byte reject, 3 path-traversal accepts
 (`//`, `/.`, `/..`), 1 mid-host UTF-8 reject, 1 511-byte boundary
-trailing-slash accept):
+trailing-slash accept).
+
+Amendment A-012 adds **5 transport-mode vectors** in the separate
+`secret-transport-mode` section of `unit.json` (not in the `secret-format`
+array). These cover transport mode extraction per §2.4:
 
 | ID                              | Polarity | Purpose                                                                                     |
 |---------------------------------|----------|---------------------------------------------------------------------------------------------|
@@ -544,6 +583,11 @@ trailing-slash accept):
 | `well-formed-host-and-dot-dot-path`           | accept | A-006 (Round-8 P-8): host + `/..` path; locks parent-dir-segment passthrough (no normalisation, no rejection).                                                      |
 | `malformed-domain-utf8-mid-host`              | reject | A-006 (Round-8 P-15): `example.com` + `C0 AF` overlong mid-host; locks §2.1 rule 5 rejection at non-zero offset (no "first byte only" implementations).             |
 | `well-formed-domain-511-host-and-trailing-slash` | accept | A-006 (Round-8 P-16): 511-octet host + `/` (total domain = 512 bytes); intersection of A-005 ceiling and trailing-slash; locks `path == "/"` accept at the boundary.|
+| `transport-mode-ws-default`                    | accept | A-012: WS transport mode default (no `?t=` parameter).                                                                      |
+| `transport-mode-http-stream`                  | accept | A-012: HTTP stream transport mode (`?t=1`).                                                                                 |
+| `transport-mode-unknown`                      | accept | A-012: Unknown transport mode parameter (`?t=99`), defaults to WS transport.                                                |
+| `transport-mode-ws-explicit`                  | accept | A-012: Explicit WebSocket transport mode parameter (`?t=0`).                                                                |
+| `transport-mode-multiple-params`              | accept | A-012: Forward-extensibility proof with multiple parameters (`?t=1&p=1`).                                                   |
 
 The three `trailing-extension-*` vectors satisfy the AC-2 backup-list
 clause (vectors covering "secret with backup list of N=1/2/3") at
@@ -702,6 +746,12 @@ Sterling, Bob, Murat). The 512-byte ceiling on `domain_len` adopted
 by §2.1 bounds `host_len` and `path_len` implicitly; no separate
 length-prefix mechanism is needed for this bound. See §6.3.
 
+### 6.9 Transport mode in secret vs Session Header
+
+**Proposal:** Convey the transport mode inside the Type3 Session Header rather than the secret format.
+
+**Decision:** Rejected. The client must establish a connection (e.g., using WebSockets or HTTP stream POST) before it can send the Session Header payload. Since the two transport modes require completely different HTTP request types and framing on the wire, the client needs to know the transport mode *before* establishing the connection. Conveying this information in the Session Header would be too late. Therefore, carrying the transport mode in the secret itself (via query parameter) is required.
+
 ## 7. Conformance contract for Story 1.7 (host/path handoff)
 
 This section records the forward handoff from the Story 1.1
@@ -721,3 +771,5 @@ all 31 `secret-format` vectors pass (including the five
 destination-structure vectors added by A-003, the six vectors
 added by Round-6 review, the three vectors added by Round-7
 review, and the six vectors added by Round-8 review under A-006).
+The 5 A-012 transport-mode vectors in `secret-transport-mode` are
+guaranteed by Story 12-3.

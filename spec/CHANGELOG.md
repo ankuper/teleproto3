@@ -6,6 +6,40 @@ with prefixed tags (`spec-v0.1.0`, `spec-v1.0.0`, ...).
 ## [Unreleased]
 
 ### Added
+- W-006 (2026-05-23, Story 12-2): HTTP stream wire format spec amendments to `spec/wire-format.md`.
+  Updated document title and preamble. Added §1.1 "Transport mode dispatch" for GET/POST auto-detection rules.
+  Renamed WebSocket upgrade content to §1.2 "WebSocket mode" and added §1.3 "HTTP stream mode" with POST handshake specifications and Nginx reverse proxy guidelines.
+  Added §1.4 "Frontend requirements (HTTP stream)" detailing path constraints and cross-referencing A-012.
+  Renamed Section 2 to "WebSocket and HTTP chunked framing", added §2.2 "HTTP chunked framing" for RFC 9112 chunked transfer coding, and documented fragmentation, chunk size limits, and EOF rules.
+  Updated §2.1 and §4 to ensure padding frames and AES-CTR key derivation/counter continuity are transport independent.
+  Updated §5 definitions to specify silent close in HTTP stream mode (terminal chunk `0\r\n\r\n` followed by immediate teardown).
+  Added contested decision entry in §7 regarding unified spec document, and appended FR49/FR50 coverage rows to §8.
+- A-012 (2026-05-23, Story 12-1): Transport Mode in Secret Format spec amendments to `spec/secret-format.md`.
+  Added query-parameter `?t=<mode>` split and extraction rules. §1 and §1.1 note that query parameters do not alter
+  the physical octet layout of the secret, and update the domain concatenation identity to `domain == host || path || "?" || query`.
+  §2.4 added to extract `transport_mode` from the query string (defaults to `T3_TRANSPORT_WS = 0`, HTTP stream is `T3_TRANSPORT_HTTP_STREAM = 1`, unknown values treated as WS with warning).
+  §3 updated to allow producers to emit `?t=<mode>` in the path component as the only exception to A-007.
+  §5.2 result schema updated with `result.transport_mode` field and A-007 split rule exception for A-012.
+  §6.9 added to document the decision to place transport mode in the secret instead of the Session Header.
+  Vector inventory count in §5.4 increased from 31 to 36.
+
+  ### Test Vectors (Story 12-1)
+  Five vectors added to `conformance/vectors/unit.json` `secret-format:` array:
+  `transport-mode-ws-default` (no parameter, defaults to WS),
+  `transport-mode-http-stream` (path `?t=1` → HTTP_STREAM),
+  `transport-mode-unknown` (path `?t=99` → WS with warning),
+  `transport-mode-ws-explicit` (path `?t=0` → WS),
+  `transport-mode-multiple-params` (path `?t=1&p=1` → HTTP_STREAM, forward-extensible).
+
+- W-004 (2026-05-21, Story 11-1): Anti-statistical-fingerprinting spec amendments to `spec/wire-format.md`.
+  §3 flag bit 0 allocated as `T3_FLAG_PADDING` (unilateral capability advertisement: client signals
+  support for receiving padding frames; v0.1.x server treats non-zero flags as `MALFORMED`,
+  unchanged). Flag table added (v0.1.x vs v0.2.0). §2.1 new subsection: padding frame convention
+  — Binary WS frame with first decrypted byte `0xFE` is a padding frame; receiver discards payload
+  and advances AES-CTR counter (Invariant 2 applies). §4.1 Invariant 2 parenthetical noting padding
+  frame coverage. §6 `**Padding flag fallback**` paragraph: v0.2.0 client MUST retry with `flags=0`
+  on v0.1.x silent-close per FR43. §7 two new contested decisions (padding-as-WS-opcode rejected;
+  out-of-band padding signaling rejected). §8 FR47 + FR48 coverage rows added.
 - A-011 (2026-05-14, Story 1-5a): operator-artefact spec landing.
   Added `spec/recovery-letter.md` (AR-C6 / UX-DR9 — six-section A4 / US-Letter
   tri-foldable PDF contract; PDF/UA per UX-DR22; locales en/ru/fa/zh-Hans;

@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "note": "Conformance vectors for libteleproto3 v0.1.1. XFAIL-PENDING-1.7 status lifted. Epic 1a (W-003): T3_CMD_BENCH=0x04 added. Story 7-1: A-003/A-005/A-006/A-007/A-009 vectors added; kdf-cross-csprng section added.",
+  "schema_version": 2,
+  "note": "Conformance vectors for libteleproto3 v0.2.0. XFAIL-PENDING-1.7 status lifted. Epic 1a (W-003): T3_CMD_BENCH=0x04 added. Story 7-1: A-003/A-005/A-006/A-007/A-009 vectors added; kdf-cross-csprng section added. Story 11-6: padding-frame, flag-negotiation, ctr-continuity-padding sections added (W-004, lib-v0.2.0). Bumped to schema v2 in Story 11-6-A to support optional payload_len. Story 12-7: secret-transport-mode vectors activated (A-012); http-stream-framing section added (W-006, Epic 12).",
   "session-header": [
     {
       "id": "well-formed-v1",
@@ -1443,6 +1443,576 @@
       "spec_section": "wire-format.md \u00a74.2 + lib/include/t3_platform.h",
       "changelog_entry": "A-009",
       "note": "t3_init() MUST return T3_ERR_INVALID_CONFIG (lib detail-code) for unrecognised CSPRNG backend value; wire class is INVALID_ARG per spec/secret-format.md \u00a75 closed set"
+    }
+  ],
+  "padding-frame": [
+    {
+      "id": "pad-detect-0xfe",
+      "args": ["fe"],
+      "expect": {
+        "ok": true,
+        "result": { "is_padding": true }
+      },
+      "spec_section": "wire-format.md §2.1",
+      "amendment": "W-004",
+      "note": "0xFE as first decrypted byte -> padding frame detected"
+    },
+    {
+      "id": "pad-detect-0x00",
+      "args": ["00"],
+      "expect": {
+        "ok": true,
+        "result": { "is_padding": false }
+      },
+      "spec_section": "wire-format.md §2.1",
+      "amendment": "W-004",
+      "note": "0x00 as first decrypted byte -> not a padding frame"
+    },
+    {
+      "id": "pad-detect-0xff",
+      "args": ["ff"],
+      "expect": {
+        "ok": true,
+        "result": { "is_padding": false }
+      },
+      "spec_section": "wire-format.md §2.1",
+      "amendment": "W-004",
+      "note": "0xFF as first decrypted byte -> not a padding frame"
+    },
+    {
+      "id": "pad-detect-0xfd",
+      "args": ["fd"],
+      "expect": {
+        "ok": true,
+        "result": { "is_padding": false }
+      },
+      "spec_section": "wire-format.md §2.1",
+      "amendment": "W-004",
+      "note": "0xFD as first decrypted byte -> not a padding frame"
+    },
+    {
+      "id": "pad-detect-0x01",
+      "args": ["01"],
+      "expect": {
+        "ok": true,
+        "result": { "is_padding": false }
+      },
+      "spec_section": "wire-format.md §2.1",
+      "amendment": "W-004",
+      "note": "0x01 (MTProto payload start) -> not a padding frame"
+    },
+    {
+      "id": "pad-min-1byte",
+      "args": ["fe"],
+      "payload_len": 1,
+      "expect": {
+        "ok": true,
+        "result": { "is_padding": true }
+      },
+      "spec_section": "wire-format.md §2.1",
+      "amendment": "W-004",
+      "note": "1-byte payload [0xFE] — minimum padding frame (marker only). payload_len=1 distinguishes this from pad-detect-0xfe which tests detection regardless of length."
+    },
+    {
+      "id": "pad-multi-byte",
+      "args": ["feabcdef0102030405"],
+      "expect": {
+        "ok": true,
+        "result": { "is_padding": true }
+      },
+      "spec_section": "wire-format.md §2.1",
+      "amendment": "W-004",
+      "note": "multi-byte payload starting with 0xFE is a padding frame"
+    }
+  ],
+  "flag-negotiation": [
+    {
+      "id": "flag-zero-valid",
+      "args": ["01010000"],
+      "expect": {
+        "ok": true,
+        "result": { "flags": 0, "padding_supported": false }
+      },
+      "spec_section": "wire-format.md §3",
+      "amendment": "W-004",
+      "note": "flags=0 is valid at all versions, padding not supported"
+    },
+    {
+      "id": "flag-padding-v01x-malformed",
+      "args": ["01010100"],
+      "config": {
+        "parser_version": "0.1.x"
+      },
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      },
+      "spec_section": "wire-format.md §3",
+      "amendment": "W-004",
+      "note": "flags=0x0001 (T3_FLAG_PADDING) is MALFORMED at v0.1.x parser"
+    },
+    {
+      "id": "flag-padding-v02-valid",
+      "args": ["01010100"],
+      "config": {
+        "parser_version": "0.2.0"
+      },
+      "expect": {
+        "ok": true,
+        "result": { "flags": 1, "padding_supported": true }
+      },
+      "spec_section": "wire-format.md §3",
+      "amendment": "W-004",
+      "note": "flags=0x0001 (T3_FLAG_PADDING) is valid at v0.2.0 parser"
+    },
+    {
+      "id": "flag-all-bits-malformed",
+      "args": ["0101ffff"],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      },
+      "spec_section": "wire-format.md §3",
+      "amendment": "W-004",
+      "note": "flags=0xFFFF is MALFORMED at all versions (undefined flags)"
+    },
+    {
+      "id": "flag-reserved-bit1-malformed",
+      "args": ["01010200"],
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      },
+      "spec_section": "wire-format.md §3",
+      "amendment": "W-004",
+      "note": "flags=0x0002 (reserved bit 1) is MALFORMED at all versions"
+    },
+    {
+      "id": "flag-both-bits-malformed",
+      "args": ["01010300"],
+      "config": {
+        "parser_version": "0.2.0"
+      },
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED"
+      },
+      "spec_section": "wire-format.md §3",
+      "amendment": "W-004",
+      "note": "flags=0x0003 (bit0=T3_FLAG_PADDING + bit1=reserved) is MALFORMED at v0.2.0 — undefined bits MUST be rejected even if T3_FLAG_PADDING is also set"
+    }
+  ],
+  "ctr-continuity-padding": [
+    {
+      "id": "ctr-pad-advance-basic",
+      "args": [
+        "00000000000000000000000000000000",
+        "0102030405060708090a0b0c0d0e0f10",
+        "fe00000000000000",
+        "1112131415161718191a1b1c1d1e1f20"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "ctr_positions": [0, 16, 24, 40]
+        }
+      },
+      "spec_section": "wire-format.md §4.1",
+      "amendment": "W-004",
+      "note": "AES-CTR advances by 16 (A), then 8 (padding), then 16 (B). Final position 40."
+    },
+    {
+      "id": "ctr-pad-advance-multi",
+      "args": [
+        "00000000000000000000000000000000",
+        "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+        "fe000000",
+        "fe0000000000000000000000",
+        "2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "ctr_positions": [0, 32, 36, 48, 80]
+        }
+      },
+      "spec_section": "wire-format.md §4.1",
+      "amendment": "W-004",
+      "note": "AES-CTR advances by 32 (A), then 4 (padding 1), then 12 (padding 2), then 32 (B). Final position 80."
+    }
+  ],
+  "secret-transport-mode": [
+    {
+      "id": "transport-mode-ws-default",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f7773"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "domain": "example.com/ws",
+          "host": "example.com",
+          "path": "/ws",
+          "query": "",
+          "fragment": "",
+          "transport_mode": 0
+        }
+      },
+      "amendment": "A-012",
+      "spec_section": "secret-format.md \u00a72.4",
+      "changelog_entry": "A-012"
+    },
+    {
+      "id": "transport-mode-http-stream",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f77733f743d31"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "domain": "example.com/ws?t=1",
+          "host": "example.com",
+          "path": "/ws",
+          "query": "t=1",
+          "fragment": "",
+          "transport_mode": 1
+        }
+      },
+      "amendment": "A-012",
+      "spec_section": "secret-format.md \u00a72.4",
+      "changelog_entry": "A-012"
+    },
+    {
+      "id": "transport-mode-unknown",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f77733f743d3939"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "domain": "example.com/ws?t=99",
+          "host": "example.com",
+          "path": "/ws",
+          "query": "t=99",
+          "fragment": "",
+          "transport_mode": 0
+        }
+      },
+      "amendment": "A-012",
+      "spec_section": "secret-format.md \u00a72.4",
+      "changelog_entry": "A-012"
+    },
+    {
+      "id": "transport-mode-ws-explicit",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f77733f743d30"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "domain": "example.com/ws?t=0",
+          "host": "example.com",
+          "path": "/ws",
+          "query": "t=0",
+          "fragment": "",
+          "transport_mode": 0
+        }
+      },
+      "amendment": "A-012",
+      "spec_section": "secret-format.md §2.4",
+      "changelog_entry": "A-012"
+    },
+    {
+      "id": "transport-mode-multiple-params",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f77733f743d3126703d31"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "domain": "example.com/ws?t=1&p=1",
+          "host": "example.com",
+          "path": "/ws",
+          "query": "t=1&p=1",
+          "fragment": "",
+          "transport_mode": 1
+        }
+      },
+      "amendment": "A-012",
+      "spec_section": "secret-format.md §2.4",
+      "changelog_entry": "A-012"
+    },
+    {
+      "id": "transport-mode-empty-t-param",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f77733f743d"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "domain": "example.com/ws?t=",
+          "host": "example.com",
+          "path": "/ws",
+          "query": "t=",
+          "fragment": "",
+          "transport_mode": 0
+        }
+      },
+      "amendment": "A-012",
+      "spec_section": "secret-format.md §2.4",
+      "changelog_entry": "A-012",
+      "note": "?t= with empty value (§2.4 rule 4): empty value string defaults to T3_TRANSPORT_WS=0."
+    },
+    {
+      "id": "transport-mode-uppercase-T-param",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f77733f543d31"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "domain": "example.com/ws?T=1",
+          "host": "example.com",
+          "path": "/ws",
+          "query": "T=1",
+          "fragment": "",
+          "transport_mode": 0
+        }
+      },
+      "amendment": "A-012",
+      "spec_section": "secret-format.md §2.4",
+      "changelog_entry": "A-012",
+      "note": "?T=1 — uppercase 'T' key. §2.4 rule 2: the key 't' is case-sensitive; 'T=1' does not match the prefix 't=' and defaults to T3_TRANSPORT_WS=0."
+    },
+    {
+      "id": "transport-mode-invalid-negative",
+      "args": [
+        "ff000000000000000000000000000000006578616d706c652e636f6d2f77733f743d2d31"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "domain": "example.com/ws?t=-1",
+          "host": "example.com",
+          "path": "/ws",
+          "query": "t=-1",
+          "fragment": "",
+          "transport_mode": 0
+        }
+      },
+      "amendment": "A-012",
+      "spec_section": "secret-format.md §2.4",
+      "changelog_entry": "A-012",
+      "note": "?t=-1 — negative value is not a valid base-10 unsigned integer (§2.4 rule 2); treated as unknown, defaults to T3_TRANSPORT_WS=0."
+    },
+    {
+      "id": "transport-mode-512byte-boundary",
+      "args": [
+        "ff00000000000000000000000000000000616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161613f743d31"
+      ],
+      "expect": {
+        "ok": true,
+        "result": {
+          "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "path": "",
+          "query": "t=1",
+          "fragment": "",
+          "transport_mode": 1
+        }
+      },
+      "amendment": "A-012",
+      "spec_section": "secret-format.md §2.4 + §2.1 rule 3",
+      "changelog_entry": "A-012",
+      "note": "domain_len=512 (A-005 ceiling): 508 bytes 'a' (host-only, no '/') + 4 bytes '?t=1' = 512. The '?' appears in the host region; A-012 §1.1 applies: host truncated to 508 'a' chars, query='t=1', transport_mode=1. Verifies the A-005 ceiling is enforced on the raw domain including the ?t=1 suffix."
+    }
+  ],
+  "http-stream-framing": [
+    {
+      "id": "chunk-encode-1byte",
+      "description": "Encode a single byte (0x41='A') into an HTTP chunk: header '1\r\n' + data + trailer '\r\n' = 6 bytes total.",
+      "function": "t3_http_chunk_write",
+      "args": {
+        "data_hex": "41"
+      },
+      "expect": {
+        "ok": true,
+        "result": {
+          "chunk_hex": "310d0a410d0a",
+          "written": 6
+        }
+      },
+      "amendment": "W-006",
+      "spec_section": "wire-format.md \u00a72.2",
+      "note": "1-byte payload: hex len='1' (0x31), CRLF, 0x41, CRLF. Total 6 bytes."
+    },
+    {
+      "id": "chunk-encode-16bytes",
+      "description": "Encode 16 bytes into an HTTP chunk: header '10\r\n' + 16 bytes + trailer '\r\n' = 22 bytes total.",
+      "function": "t3_http_chunk_write",
+      "args": {
+        "data_hex": "000102030405060708090a0b0c0d0e0f"
+      },
+      "expect": {
+        "ok": true,
+        "result": {
+          "chunk_hex": "31300d0a000102030405060708090a0b0c0d0e0f0d0a",
+          "written": 22
+        }
+      },
+      "amendment": "W-006",
+      "spec_section": "wire-format.md \u00a72.2",
+      "note": "16-byte payload: hex len='10' (0x31 0x30), CRLF, 16 bytes, CRLF. Total 22 bytes."
+    },
+    {
+      "id": "chunk-encode-255bytes",
+      "description": "Encode 255 bytes into an HTTP chunk: header 'ff\r\n' + 255 bytes + trailer '\r\n' = 261 bytes total.",
+      "function": "t3_http_chunk_write",
+      "args": {
+        "data_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe"
+      },
+      "expect": {
+        "ok": true,
+        "result": {
+          "chunk_hex": "66660d0a000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe0d0a",
+          "written": 261
+        }
+      },
+      "amendment": "W-006",
+      "spec_section": "wire-format.md \u00a72.2",
+      "note": "255-byte payload: hex len='ff' (0x66 0x66), CRLF, 255 bytes (0x00..0xFE), CRLF. Total 261 bytes."
+    },
+    {
+      "id": "chunk-encode-4096bytes",
+      "description": "Encode 4096 bytes into an HTTP chunk: header '1000\r\n' + 4096 bytes + trailer '\r\n' = 4104 bytes total.",
+      "function": "t3_http_chunk_write",
+      "args": {
+        "data_len": 4096,
+        "data_hex": "aa",
+        "data_fill": "repeat"
+      },
+      "expect": {
+        "ok": true,
+        "result": {
+          "written": 4104,
+          "header_hex": "313030300d0a",
+          "trailer_hex": "0d0a"
+        }
+      },
+      "amendment": "W-006",
+      "spec_section": "wire-format.md \u00a72.2",
+      "note": "4096-byte payload: hex len='1000' (0x31 0x30 0x30 0x30), CRLF, 4096 bytes of 0xAA, CRLF. Total 4104 bytes. data_fill=repeat means repeat data_hex byte for data_len bytes."
+    },
+    {
+      "id": "chunk-terminal",
+      "description": "Terminal (last) chunk: '0\r\n\r\n' = 5 bytes. Signals end of chunked body.",
+      "function": "t3_http_chunk_write",
+      "args": {
+        "data_hex": "",
+        "terminal": true
+      },
+      "expect": {
+        "ok": true,
+        "result": {
+          "chunk_hex": "300d0a0d0a",
+          "written": 5
+        }
+      },
+      "amendment": "W-006",
+      "spec_section": "wire-format.md \u00a72.2",
+      "note": "Terminal chunk: '0' (0x30) CRLF CRLF = 5 bytes. RFC 9112 §7.1."
+    },
+    {
+      "id": "chunk-parse-roundtrip",
+      "description": "Parse a well-formed 1-byte chunk '1\r\nA\r\n': data=0x41, data_len=1, consumed=6.",
+      "function": "t3_http_chunk_parse",
+      "args": {
+        "buf_hex": "310d0a410d0a"
+      },
+      "expect": {
+        "ok": true,
+        "result": {
+          "data_hex": "41",
+          "data_len": 1,
+          "consumed": 6
+        }
+      },
+      "amendment": "W-006",
+      "spec_section": "wire-format.md \u00a72.2",
+      "note": "Parse roundtrip of chunk-encode-1byte output: '1\r\nA\r\n'."
+    },
+    {
+      "id": "chunk-parse-terminal",
+      "description": "Parse terminal chunk '0\r\n\r\n': data_len=0, consumed=5.",
+      "function": "t3_http_chunk_parse",
+      "args": {
+        "buf_hex": "300d0a0d0a"
+      },
+      "expect": {
+        "ok": true,
+        "result": {
+          "data_hex": "",
+          "data_len": 0,
+          "consumed": 5,
+          "is_terminal": true
+        }
+      },
+      "amendment": "W-006",
+      "spec_section": "wire-format.md \u00a72.2",
+      "note": "Terminal chunk '0\r\n\r\n': size=0 signals end of chunked body. data_len=0, consumed=5."
+    },
+    {
+      "id": "chunk-parse-malformed-no-crlf",
+      "description": "Parse truncated chunk header '1' (no CRLF): must return MALFORMED.",
+      "function": "t3_http_chunk_parse",
+      "args": {
+        "buf_hex": "31"
+      },
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "missing-crlf-after-size"
+        }
+      },
+      "amendment": "W-006",
+      "spec_section": "wire-format.md \u00a72.2",
+      "note": "Truncated chunk header: only size digit '1', no CRLF. Buffer too small for a complete header."
+    },
+    {
+      "id": "chunk-parse-malformed-bad-hex",
+      "description": "Parse chunk header 'xz\r\n' — non-hex size digits: must return MALFORMED.",
+      "function": "t3_http_chunk_parse",
+      "args": {
+        "buf_hex": "787a0d0a"
+      },
+      "expect": {
+        "ok": false,
+        "error": "MALFORMED",
+        "detail": {
+          "rule": "invalid-hex-size"
+        }
+      },
+      "amendment": "W-006",
+      "spec_section": "wire-format.md \u00a72.2",
+      "note": "'xz\r\n' — 'x' and 'z' are not valid hex digits. Parser must reject with MALFORMED."
+    },
+    {
+      "id": "chunk-parse-incomplete",
+      "description": "Parse '3\r\nAB' — size says 3 bytes but only 2 data bytes available: must return BUF_TOO_SMALL.",
+      "function": "t3_http_chunk_parse",
+      "args": {
+        "buf_hex": "330d0a4142"
+      },
+      "expect": {
+        "ok": false,
+        "error": "BUF_TOO_SMALL",
+        "detail": {
+          "rule": "incomplete-chunk-data"
+        }
+      },
+      "amendment": "W-006",
+      "spec_section": "wire-format.md \u00a72.2",
+      "note": "Chunk header says 3 bytes ('3\r\n') but only 2 data bytes 'AB' present. Parser must signal BUF_TOO_SMALL."
     }
   ]
 }
