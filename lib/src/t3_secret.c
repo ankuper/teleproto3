@@ -318,3 +318,44 @@ T3_API t3_result_t t3_secret_serialise(const t3_secret_fields *in, uint8_t *out,
     *inout_len = required;
     return T3_OK;
 }
+
+T3_API int t3_secret_transport_mode(const t3_secret_t *s) {
+    if (!s || !s->query || s->query[0] == '\0') {
+        return T3_TRANSPORT_WS;
+    }
+    /* key is case-sensitive: only lowercase 't' matches (spec §2.4 rule 2) */
+    if (strncmp(s->query, "t=", 2) != 0) {
+        return T3_TRANSPORT_WS;
+    }
+    const char *val = s->query + 2;
+    /* empty value: t= or t=& → WS default (spec §2.4 rule 4) */
+    if (val[0] == '\0' || val[0] == '&') {
+        return T3_TRANSPORT_WS;
+    }
+    /* non-decimal or negative sign → WS default (spec §2.4 rule 2) */
+    if (val[0] < '0' || val[0] > '9') {
+        return T3_TRANSPORT_WS;
+    }
+    /* leading zero with more digits → not a valid base-10 integer (spec §2.4 rule 2) */
+    if (val[0] == '0' && val[1] != '\0' && val[1] != '&') {
+        return T3_TRANSPORT_WS;
+    }
+    /* parse base-10 unsigned integer, stop at '&' or '\0' */
+    unsigned long mode = 0;
+    const char *p = val;
+    while (*p >= '0' && *p <= '9') {
+        mode = mode * 10u + (unsigned long)(*p - '0');
+        if (mode > 255u) { /* no valid transport mode this large */
+            return T3_TRANSPORT_WS;
+        }
+        p++;
+    }
+    /* value must terminate cleanly at end-of-string or next parameter */
+    if (*p != '\0' && *p != '&') {
+        return T3_TRANSPORT_WS; /* non-decimal characters inside value */
+    }
+    switch ((int)mode) {
+        case T3_TRANSPORT_HTTP_STREAM: return T3_TRANSPORT_HTTP_STREAM;
+        default:                       return T3_TRANSPORT_WS;
+    }
+}

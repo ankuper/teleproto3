@@ -54,11 +54,22 @@ static int jbool(const char *j, const char *k){
     return -1;
 }
 
-static int run_vectors(const char *path){
+/* Returns the integer value for key k in JSON object j, or INT_MIN if absent. */
+static int jint(const char *j, const char *k){
+    char n[128]; snprintf(n,sizeof n,"\"%s\"",k);
+    const char *p=strstr(j,n); if(!p) return -2147483647-1; /* INT_MIN */
+    p+=strlen(n);
+    while(*p==' '||*p=='\t'||*p==':'||*p=='\r'||*p=='\n') p++;
+    if(*p<'0'||*p>'9') return -2147483647-1;
+    return (int)strtol(p,NULL,10);
+}
+
+static int run_vectors(const char *path, const char *section_name){
     FILE *f=fopen(path,"r"); if(!f){fprintf(stderr,"[vec] SKIP %s\n",path);return 0;}
     fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET);
     char *buf=(char*)malloc(sz+1); fread(buf,1,sz,f); buf[sz]=0; fclose(f);
-    char *arr=strstr(buf,"\"secret-format\""); if(!arr){free(buf);return 0;}
+    char section_key[128]; snprintf(section_key, sizeof(section_key), "\"%s\"", section_name);
+    char *arr=strstr(buf,section_key); if(!arr){free(buf);return 0;}
     arr=strchr(arr,'['); if(!arr){free(buf);return 0;} arr++;
     int pass=0,fail=0,skip=0; char *p=arr;
     uint8_t dbuf[2048];
@@ -95,7 +106,24 @@ static int run_vectors(const char *path){
             fprintf(stderr,"[vec] %s bad hex\n",id);free(id);free(es);free(obj);fail++;continue;}
         t3_result_t r=t3_secret_parse(bl>0?dbuf:NULL,bl,&s);
         if(ok){
-            if(r==T3_OK&&s){printf("[vec] PASS %s\n",id);pass++;t3_secret_free(s);}
+            if(r==T3_OK&&s){
+                /* check result fields if present in vector */
+                char *rb=strstr(eb?eb:obj,"\"result\"");
+                int field_ok=1;
+                if(rb){
+                    int exp_tm=jint(rb,"transport_mode");
+                    if(exp_tm != (-2147483647-1)) { /* field present */
+                        int got_tm=t3_secret_transport_mode(s);
+                        if(got_tm!=exp_tm){
+                            fprintf(stderr,"[vec] FAIL %s transport_mode: exp %d got %d\n",id,exp_tm,got_tm);
+                            field_ok=0;
+                        }
+                    }
+                }
+                if(field_ok){printf("[vec] PASS %s\n",id);pass++;}
+                else{fail++;}
+                t3_secret_free(s);
+            }
             else{fprintf(stderr,"[vec] FAIL %s exp ok got %s\n",id,t3_strerror(r));fail++;if(s)t3_secret_free(s);}
         } else {
             t3_result_t ex=err_str(es);
@@ -106,7 +134,7 @@ static int run_vectors(const char *path){
         free(id); free(es); free(obj);
     }
     free(buf);
-    printf("[vectors] secret-format: %d pass, %d fail, %d skip\n",pass,fail,skip);
+    printf("[vectors] %s: %d pass, %d fail, %d skip\n",section_name,pass,fail,skip);
     return fail>0?1:0;
 }
 
@@ -132,5 +160,7 @@ static int smoke(void){
 int main(int argc, char **argv){
     int rc=smoke();
     const char *p=argc>1?argv[1]:"../../conformance/vectors/unit.json";
-    rc|=run_vectors(p); return rc;
+    rc|=run_vectors(p, "secret-format");
+    rc|=run_vectors(p, "secret-transport-mode");
+    return rc;
 }
