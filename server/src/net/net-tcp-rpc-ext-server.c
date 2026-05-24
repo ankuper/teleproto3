@@ -1368,6 +1368,7 @@ int tcp_rpcs_ext_init_accepted (connection_job_t C) {
   // probe fails quickly (r<0) and we fall back to the existing fake-TLS /
   // obfuscated2 stack with no observable cost.
   CONN_INFO(C)->ws_state = WS_STATE_HANDSHAKE;
+  CONN_INFO(C)->type3_dispatch_done = 0;
   job_timer_insert (C, precise_now + 10);
   return tcp_rpcs_init_accepted_nohs (C);
 }
@@ -1399,45 +1400,229 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
     // handles the bytes normally. If we need more data (r == 0), return.
     if (c->ws_state == WS_STATE_HANDSHAKE) {
       vkprintf(3, "WS_STATE: processing handshake, bytes=%d\n", c->in.total_bytes);
-      char ws_key[128] = {0};
-      char ws_path[256] = {0};
-      int r = ws_parse_upgrade_request (&c->in, ws_key, sizeof(ws_key), ws_path, sizeof(ws_path));
-      if (r == 0) {
-        return NEED_MORE_BYTES;
-      }
-      if (r < 0) {
-        vkprintf(2, "WS_STATE: not a WS upgrade, falling back to standard parsing\n");
-        c->ws_state = WS_STATE_NONE;
-      } else {
-        vkprintf (1, "WebSocket upgrade from %s:%d path=%s\n", show_remote_ip (C), c->remote_port, ws_path);
-        char accept_key[64];
-        if (ws_compute_accept_key (ws_key, accept_key, sizeof(accept_key)) < 0) {
-          vkprintf (0, "WS_STATE: failed to compute accept key\n");
-          fail_connection (C, -1);
-          return 0;
+      if (c->in.total_bytes >= 4) {
+        unsigned char peek4[4];
+        assert (rwm_fetch_lookup (&c->in, peek4, 4) == 4);
+        if (memcmp (peek4, "POST", 4) == 0) {
+          // Parse HTTP POST request headers
+          int total = c->in.total_bytes;
+          int peek_len = total < 4096 ? total : 4096;
+          unsigned char peek_buf[peek_len + 1];
+          assert (rwm_fetch_lookup (&c->in, peek_buf, peek_len) == peek_len);
+          peek_buf[peek_len] = '\0';
+          char *end = strstr ((char *)peek_buf, "\r\n\r\n");
+          if (!end) {
+            if (total >= 4096) {
+              vkprintf (0, "HTTP stream: headers too large\n");
+              fail_connection (C, -1);
+              return SKIP_ALL_BYTES;
+            }
+            return NEED_MORE_BYTES;
+          }
+
+          /* Parse Host header (informational). strstr is POSIX; RFC 7230 §3.2
+           * says header field names are case-insensitive but in practice all
+           * HTTP/1.1 clients send exactly "Host:". Two checks cover lowercase. */
+          char host[256] = {0};
+          char *host_hdr = strstr ((char *)peek_buf, "\r\nHost:");
+          if (!host_hdr) host_hdr = strstr ((char *)peek_buf, "\r\nhost:");
+          if (host_hdr) {
+            host_hdr += 7;
+            while (*host_hdr == ' ' || *host_hdr == '\t') host_hdr++;
+            char *host_end = strstr (host_hdr, "\r\n");
+            if (host_end) {
+              int host_len = host_end - host_hdr;
+              if (host_len > 0 && host_len < (int)sizeof(host)) {
+                memcpy (host, host_hdr, host_len);
+                host[host_len] = '\0';
+              }
+            }
+          }
+
+          vkprintf (1, "HTTP stream connection detected from %s:%d (Host: %s)\n", show_remote_ip (C), c->remote_port, host);
+
+          // Consume request headers up to and including CRLF CRLF
+          int consume = (int)(end - (char *)peek_buf) + 4;
+          assert (rwm_skip_data (&c->in, consume) == consume);
+
+          // Send 200 OK response with chunked encoding headers
+          char response[] = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
+          int resp_len = sizeof(response) - 1;
+          rwm_push_data (&c->out, response, resp_len);
+          __sync_fetch_and_or (&c->flags, C_WANTWR);
+          job_signal (JOB_REF_CREATE_PASS (C), JS_RUN);
+
+          c->ws_state = WS_STATE_NONE; // We are NOT a WS connection
+          c->transport_mode = TRANSPORT_MODE_HTTP_STREAM;
+          c->http_chunk_remaining = 0;
+          c->http_chunk_header_state = 0;
+
+          if (c->in.total_bytes > 0) {
+            struct raw_message unwrapped;
+            rwm_init (&unwrapped, 0);
+            int needed = T3_PRECRYPTO_BYTES; /* Session Header (4) + random_header (64) */
+            while (needed > 0 && c->in.total_bytes > 0) {
+              if (c->http_chunk_remaining == 0) {
+                if (c->http_chunk_header_state == 2) {
+                  if (c->in.total_bytes < 2) {
+                    break;
+                  }
+                  unsigned char crlf[2];
+                  assert (rwm_fetch_lookup (&c->in, crlf, 2) == 2);
+                  if (crlf[0] != '\r' || crlf[1] != '\n') {
+                    vkprintf (1, "HTTP stream pre-crypto transition: expected trailing CRLF\n");
+                    rwm_free (&unwrapped);
+                    fail_connection (C, -1);
+                    return SKIP_ALL_BYTES;
+                  }
+                  assert (rwm_skip_data (&c->in, 2) == 2);
+                  c->http_chunk_header_state = 0;
+                }
+
+                if (c->http_chunk_header_state == 0) {
+                  int avail = c->in.total_bytes;
+                  if (avail == 0) {
+                    break;
+                  }
+                  int peek_len = avail < 16 ? avail : 16;
+                  unsigned char peek_buf[16];
+                  assert (rwm_fetch_lookup (&c->in, peek_buf, peek_len) == peek_len);
+
+                  int header_len = 0;
+                  while (header_len < peek_len - 1) {
+                    if (peek_buf[header_len] == '\r' && peek_buf[header_len + 1] == '\n') {
+                      break;
+                    }
+                    header_len++;
+                  }
+
+                  if (header_len >= peek_len - 1) {
+                    if (avail >= 16) {
+                      vkprintf (1, "HTTP stream pre-crypto transition: chunk header too long\n");
+                      rwm_free (&unwrapped);
+                      fail_connection (C, -1);
+                      return SKIP_ALL_BYTES;
+                    }
+                    break;
+                  }
+
+                  /* Parse hex chunk-size with overflow guard and max-size cap
+                   * (spec/wire-format.md §2.2: max chunk-size is 65535). */
+                  unsigned int chunk_size = 0;
+                  int i;
+                  if (header_len == 0) {
+                    rwm_free (&unwrapped);
+                    fail_connection (C, -1);
+                    return SKIP_ALL_BYTES;
+                  }
+                  for (i = 0; i < header_len; i++) {
+                    unsigned char ch = (unsigned char)peek_buf[i];
+                    unsigned int digit;
+                    if      (ch >= '0' && ch <= '9') digit = (unsigned int)(ch - '0');
+                    else if (ch >= 'a' && ch <= 'f') digit = (unsigned int)(ch - 'a') + 10u;
+                    else if (ch >= 'A' && ch <= 'F') digit = (unsigned int)(ch - 'A') + 10u;
+                    else if (ch == ';') {
+                      break; /* chunk extension: ignore remainder */
+                    } else {
+                      rwm_free (&unwrapped);
+                      fail_connection (C, -1);
+                      return SKIP_ALL_BYTES;
+                    }
+                    if (chunk_size > (65535u - digit) / 16u) {
+                      /* overflow or exceeds spec max (§2.2: 65535 bytes) */
+                      rwm_free (&unwrapped);
+                      fail_connection (C, -1);
+                      return SKIP_ALL_BYTES;
+                    }
+                    chunk_size = chunk_size * 16u + digit;
+                  }
+
+                  int consume_hdr = header_len + 2;
+                  assert (rwm_skip_data (&c->in, consume_hdr) == consume_hdr);
+
+                  if (chunk_size == 0) {
+                    rwm_free (&unwrapped);
+                    fail_connection (C, 0);
+                    return SKIP_ALL_BYTES;
+                  }
+
+                  c->http_chunk_remaining = (int)chunk_size;
+                  c->http_chunk_header_state = 1;
+                }
+              }
+
+              int avail = c->in.total_bytes;
+              int to_read = avail < c->http_chunk_remaining ? avail : c->http_chunk_remaining;
+              if (to_read > needed) {
+                to_read = needed;
+              }
+              if (to_read <= 0) break;
+
+              struct raw_message payload;
+              rwm_init (&payload, 0);
+              assert (rwm_split_head (&payload, &c->in, to_read) == 0);
+              rwm_union (&unwrapped, &payload);
+
+              c->http_chunk_remaining -= to_read;
+              needed -= to_read;
+              if (c->http_chunk_remaining == 0) {
+                c->http_chunk_header_state = 2;
+              }
+            }
+
+            rwm_union (&c->in_u, &c->in);
+            c->in = unwrapped;
+          }
+
+          vkprintf (1, "HTTP stream handshake completed, sent response headers (%d bytes)\n", resp_len);
+
+          if (!c->in.total_bytes) {
+            return NEED_MORE_BYTES;
+          }
         }
-        char response[512];
-        int resp_len = ws_build_upgrade_response (accept_key, response, sizeof(response));
+      }
 
-        // Consume the HTTP request up to and including the \r\n\r\n terminator.
-        int total = c->in.total_bytes;
-        int peek_len = total < 4096 ? total : 4096;
-        unsigned char peek_buf[peek_len];
-        assert (rwm_fetch_lookup (&c->in, peek_buf, peek_len) == peek_len);
-        char *end = strstr ((char *)peek_buf, "\r\n\r\n");
-        int consume = end ? (int)(end - (char *)peek_buf) + 4 : peek_len;
-        assert (rwm_skip_data (&c->in, consume) == consume);
-
-        // Send 101 directly to c->out; flush via C_WANTWR.
-        rwm_push_data (&c->out, response, resp_len);
-        __sync_fetch_and_or (&c->flags, C_WANTWR);
-        job_signal (JOB_REF_CREATE_PASS (C), JS_RUN);
-
-        c->ws_state = WS_STATE_ACTIVE;
-        vkprintf (1, "WS_STATE: upgraded, now active. Sent bytes=%d\n", resp_len);
-
-        if (!c->in.total_bytes) {
+      if (c->ws_state == WS_STATE_HANDSHAKE) {
+        char ws_key[128] = {0};
+        char ws_path[256] = {0};
+        int r = ws_parse_upgrade_request (&c->in, ws_key, sizeof(ws_key), ws_path, sizeof(ws_path));
+        if (r == 0) {
           return NEED_MORE_BYTES;
+        }
+        if (r < 0) {
+          vkprintf(2, "WS_STATE: not a WS upgrade, falling back to standard parsing\n");
+          c->ws_state = WS_STATE_NONE;
+        } else {
+          vkprintf (1, "WebSocket upgrade from %s:%d path=%s\n", show_remote_ip (C), c->remote_port, ws_path);
+          char accept_key[64];
+          if (ws_compute_accept_key (ws_key, accept_key, sizeof(accept_key)) < 0) {
+            vkprintf (0, "WS_STATE: failed to compute accept key\n");
+            fail_connection (C, -1);
+            return 0;
+          }
+          char response[512];
+          int resp_len = ws_build_upgrade_response (accept_key, response, sizeof(response));
+
+          // Consume the HTTP request up to and including the \r\n\r\n terminator.
+          int total = c->in.total_bytes;
+          int peek_len = total < 4096 ? total : 4096;
+          unsigned char peek_buf[peek_len];
+          assert (rwm_fetch_lookup (&c->in, peek_buf, peek_len) == peek_len);
+          char *end = strstr ((char *)peek_buf, "\r\n\r\n");
+          int consume = end ? (int)(end - (char *)peek_buf) + 4 : peek_len;
+          assert (rwm_skip_data (&c->in, consume) == consume);
+
+          // Send 101 directly to c->out; flush via C_WANTWR.
+          rwm_push_data (&c->out, response, resp_len);
+          __sync_fetch_and_or (&c->flags, C_WANTWR);
+          job_signal (JOB_REF_CREATE_PASS (C), JS_RUN);
+
+          c->ws_state = WS_STATE_ACTIVE;
+          vkprintf (1, "WS_STATE: upgraded, now active. Sent bytes=%d\n", resp_len);
+
+          if (!c->in.total_bytes) {
+            return NEED_MORE_BYTES;
+          }
         }
       }
     }
@@ -1573,7 +1758,62 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
       }
       /* END AR-S2 dispatch hook */
 #endif /* TELEPROTO3_DISPATCH_HOOK */
-      // Fall through to normal MTProto detection with plaintext obfuscated2 in c->in
+    } else if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM && !c->crypto) {
+      vkprintf (3, "HTTP_STREAM: pre-crypto check, in.total_bytes=%d\n", c->in.total_bytes);
+
+      if (c->in.total_bytes == 0) {
+        return NEED_MORE_BYTES;
+      }
+
+#ifdef TELEPROTO3_DISPATCH_HOOK
+      /* BEGIN AR-S2 dispatch hook (fork-local Type3 — see net-type3-dispatch.h) */
+      {
+#ifdef TELEPROTO3_BENCH
+        /* Story 1a-2: a previously-installed bench session keeps draining
+         * here without a fresh dispatch; the BENCH path is intentionally
+         * pre-AES-CTR (see bench-handler.h header comment). */
+        bench_conn_t *bsess = bench_session_lookup(c);
+        if (bsess) {
+          int rc_drain = bench_drain_connection(C);
+          if (rc_drain < 0) {
+            bench_connection_clear(c);  /* 1a-9: release marker on close */
+            fail_connection (C, -1);
+            return SKIP_ALL_BYTES;
+          }
+          return NEED_MORE_BYTES;
+        }
+
+        /* Story 1a-9: bench-connection guard. */
+        if (bench_connection_is_marked(c)) {
+          vkprintf(1, "Type3 BENCH: session gone for marked bench conn fd=%d gen=%d — closing\n",
+                   c->fd, c->generation);
+          bench_connection_clear(c);
+          fail_connection (C, -1);
+          return SKIP_ALL_BYTES;
+        }
+#endif
+        type3_dispatch_outcome_t r = type3_dispatch_on_crypto_init(C);
+        if (r == TYPE3_DISPATCH_DROP_SILENT) { return SKIP_ALL_BYTES; }
+#ifdef TELEPROTO3_BENCH
+        if (r == TYPE3_DISPATCH_BENCH) {
+          if (bench_session_install(c) == NULL) {
+            vkprintf(0, "Type3 BENCH: session install failed (registry full or alloc); closing\n");
+            fail_connection (C, -1);
+            return SKIP_ALL_BYTES;
+          }
+          bench_connection_mark(c);
+          int rc_drain = bench_drain_connection(C);
+          if (rc_drain < 0) {
+            bench_connection_clear(c);
+            fail_connection (C, -1);
+            return SKIP_ALL_BYTES;
+          }
+          return NEED_MORE_BYTES;
+        }
+#endif
+        if (r == TYPE3_DISPATCH_ACCEPT)      { /* fall through to existing obfuscated2/MTProto logic */ }
+      }
+#endif
     }
 
     if (D->in_packet_num != -3) {

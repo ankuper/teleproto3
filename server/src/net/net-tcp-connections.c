@@ -26,6 +26,7 @@
 #include <errno.h>
 #include <sys/uio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <assert.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -38,6 +39,9 @@
 #include "net/net-websocket.h"
 #include "kprintf.h"
 
+
+/* Forward declaration: defined after the chunk-header helper (below). */
+static void http_stream_write_terminal (connection_job_t C);
 
 int cpu_tcp_free_connection_buffers (connection_job_t C) /* {{{ */ {
   struct connection_info *c = CONN_INFO (C);
@@ -59,6 +63,11 @@ int cpu_tcp_server_writer (connection_job_t C) /* {{{ */ {
   int stop = 0;
   if (c->status == conn_write_close) {
     stop = 1;
+    /* For HTTP stream connections, emit the terminal chunk before the final
+     * flush so the client receives a clean end-of-stream signal (spec §5). */
+    if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM && c->crypto) {
+      http_stream_write_terminal (C);
+    }
   }
   
   while (1) {
@@ -100,6 +109,168 @@ int cpu_tcp_server_writer (connection_job_t C) /* {{{ */ {
 }
 /* }}} */
 
+/*
+ * http_stream_chunk_header_parse — shared chunk-header parser for HTTP stream mode.
+ *
+ * Peeks at `rmsg` (without consuming) to find the chunk-size CRLF line.
+ * On success: consumes the header (hex + CRLF) from `rmsg`, fills *out_size,
+ *             returns 0.  chunk_size 0 means terminal chunk.
+ * Returns  1 if more data is needed (not yet MALFORMED).
+ * Returns -1 if the header is MALFORMED (caller must fail_connection).
+ *
+ * Limits enforced (spec/wire-format.md §2.2):
+ *   - max chunk-size: 65535 bytes
+ *   - chunk extensions: recognised at ';', skipped (not validated further)
+ *   - header line (hex + optional extension): must fit in 16 bytes
+ */
+static int http_stream_chunk_header_parse (struct raw_message *rmsg, unsigned int *out_size) {
+  int avail = rmsg->total_bytes;
+  if (avail == 0) {
+    return 1; /* need more data */
+  }
+  int peek_len = avail < 18 ? avail : 18; /* 16 hex + CRLF */
+  unsigned char peek_buf[18];
+  assert (rwm_fetch_lookup (rmsg, peek_buf, peek_len) == peek_len);
+
+  /* Find first CRLF in the peek window */
+  int header_line_len = -1;
+  for (int i = 0; i < peek_len - 1; i++) {
+    if (peek_buf[i] == '\r' && peek_buf[i + 1] == '\n') {
+      header_line_len = i;
+      break;
+    }
+  }
+  if (header_line_len < 0) {
+    if (avail >= 18) {
+      return -1; /* MALFORMED: chunk header too long */
+    }
+    return 1; /* need more data */
+  }
+  if (header_line_len == 0) {
+    return -1; /* MALFORMED: empty chunk-size field */
+  }
+
+  /* Find optional ';' chunk-extension separator */
+  int hex_len = header_line_len;
+  for (int i = 0; i < header_line_len; i++) {
+    if (peek_buf[i] == ';') {
+      hex_len = i;
+      break;
+    }
+  }
+  if (hex_len == 0) {
+    return -1; /* MALFORMED: no hex digits before extension */
+  }
+
+  /* Parse hex digits into unsigned int with overflow guard */
+  unsigned int size = 0;
+  for (int i = 0; i < hex_len; i++) {
+    unsigned char ch = peek_buf[i];
+    unsigned int digit;
+    if      (ch >= '0' && ch <= '9') digit = (unsigned int)(ch - '0');
+    else if (ch >= 'a' && ch <= 'f') digit = (unsigned int)(ch - 'a') + 10u;
+    else if (ch >= 'A' && ch <= 'F') digit = (unsigned int)(ch - 'A') + 10u;
+    else {
+      return -1; /* MALFORMED: non-hex character */
+    }
+    /* Overflow check: size * 16 + digit <= 65535 */
+    if (size > (65535u - digit) / 16u) {
+      return -1; /* MALFORMED: chunk-size exceeds 65535 (spec §2.2) */
+    }
+    size = size * 16u + digit;
+  }
+
+  /* Consume the header line (hex [;ext] CRLF) from the raw_message */
+  int consume = header_line_len + 2;
+  assert (rwm_skip_data (rmsg, consume) == consume);
+
+  *out_size = size;
+  return 0;
+}
+
+/*
+ * http_stream_write_terminal — emit the HTTP chunked terminal chunk (0\r\n\r\n)
+ * to c->out_p for this connection, signaling end-of-stream to the client.
+ * Called before fail_connection() for graceful close in HTTP stream mode.
+ */
+static void http_stream_write_terminal (connection_job_t C) {
+  struct connection_info *c = CONN_INFO (C);
+  if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM) {
+    rwm_push_data (&c->out_p, "0\r\n\r\n", 5);
+    __sync_fetch_and_or (&c->flags, C_WANTWR);
+    job_signal (JOB_REF_CREATE_PASS (C), JS_RUN);
+  }
+}
+
+static int http_stream_unwrap_precrypto (connection_job_t C) {
+  struct connection_info *c = CONN_INFO (C);
+
+  int needed = T3_PRECRYPTO_BYTES - c->in.total_bytes; /* 4 Session Header + 64 random_header */
+  if (needed <= 0) {
+    return 0;
+  }
+
+  while (needed > 0 && c->in_u.total_bytes > 0) {
+    if (c->http_chunk_remaining == 0) {
+      if (c->http_chunk_header_state == 2) {
+        if (c->in_u.total_bytes < 2) {
+          break;
+        }
+        unsigned char crlf[2];
+        assert (rwm_fetch_lookup (&c->in_u, crlf, 2) == 2);
+        if (crlf[0] != '\r' || crlf[1] != '\n') {
+          vkprintf (1, "HTTP stream pre-crypto: expected trailing CRLF, got 0x%02x 0x%02x\n", crlf[0], crlf[1]);
+          fail_connection (C, -1);
+          return -1;
+        }
+        assert (rwm_skip_data (&c->in_u, 2) == 2);
+        c->http_chunk_header_state = 0;
+      }
+
+      if (c->http_chunk_header_state == 0) {
+        unsigned int chunk_size = 0;
+        int r = http_stream_chunk_header_parse (&c->in_u, &chunk_size);
+        if (r == 1) {
+          break; /* need more data */
+        }
+        if (r < 0) {
+          vkprintf (1, "HTTP stream pre-crypto: MALFORMED chunk header\n");
+          fail_connection (C, -1);
+          return -1;
+        }
+        if (chunk_size == 0) {
+          vkprintf (1, "HTTP stream pre-crypto: terminal chunk, closing gracefully\n");
+          fail_connection (C, 0);
+          return -1;
+        }
+        c->http_chunk_remaining = (int)chunk_size;
+        c->http_chunk_header_state = 1;
+      }
+    }
+
+    int avail = c->in_u.total_bytes;
+    int to_read = avail < c->http_chunk_remaining ? avail : c->http_chunk_remaining;
+    if (to_read > needed) {
+      to_read = needed;
+    }
+    if (to_read <= 0) break;
+
+    struct raw_message payload;
+    rwm_init (&payload, 0);
+    assert (rwm_split_head (&payload, &c->in_u, to_read) == 0);
+    rwm_union (&c->in, &payload);
+
+    c->http_chunk_remaining -= to_read;
+    needed -= to_read;
+    if (c->http_chunk_remaining == 0) {
+      c->http_chunk_header_state = 2;
+    }
+  }
+
+  return 0;
+}
+
+
 int cpu_tcp_server_reader (connection_job_t C) /* {{{ */ {
   assert_net_cpu_thread ();
   struct connection_info *c = CONN_INFO(C);
@@ -108,7 +279,7 @@ int cpu_tcp_server_reader (connection_job_t C) /* {{{ */ {
     struct raw_message *raw = mpq_pop_nw (c->in_queue, 4);
     if (!raw) { break; }
 
-    if (c->crypto) {
+    if (c->crypto || (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM && !c->crypto)) {
       rwm_union (&c->in_u, raw);
     } else {
       rwm_union (&c->in, raw);
@@ -118,6 +289,10 @@ int cpu_tcp_server_reader (connection_job_t C) /* {{{ */ {
         
   if (c->crypto) {
     if (c->type->crypto_decrypt_input (C) < 0) {
+      return -1;
+    }
+  } else if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM) {
+    if (http_stream_unwrap_precrypto (C) < 0) {
       return -1;
     }
   }
@@ -244,6 +419,12 @@ int cpu_tcp_aes_crypto_needed_output_bytes (connection_job_t C) /* {{{ */ {
 }
 /* }}} */
 
+static int http_chunk_write_header (struct raw_message *out, int len) {
+  char hex_buf[32];
+  int hex_len = snprintf (hex_buf, sizeof (hex_buf), "%x\r\n", len);
+  return rwm_push_data (out, hex_buf, hex_len);
+}
+
 int cpu_tcp_aes_crypto_ctr128_encrypt_output (connection_job_t C) /* {{{ */ {
   assert_net_cpu_thread ();
   struct connection_info *c = CONN_INFO (C);
@@ -263,6 +444,13 @@ int cpu_tcp_aes_crypto_ctr128_encrypt_output (connection_job_t C) /* {{{ */ {
       }
       ws_write_frame_header (&c->out_p, len);
       vkprintf (2, "WS_OUTPUT: send binary frame len=%d\n", len);
+    } else if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM) {
+      const int HTTP_MAX_CHUNK = 16384;
+      if (len > HTTP_MAX_CHUNK) {
+        len = HTTP_MAX_CHUNK;
+      }
+      http_chunk_write_header (&c->out_p, len);
+      vkprintf (2, "HTTP_STREAM: send chunk len=%d\n", len);
     } else if (c->flags & C_IS_TLS) {
       assert (c->left_tls_packet_length >= 0);
       const int MAX_PACKET_LENGTH = 1425;
@@ -278,6 +466,10 @@ int cpu_tcp_aes_crypto_ctr128_encrypt_output (connection_job_t C) /* {{{ */ {
     if (rwm_encrypt_decrypt_to (&c->out, &c->out_p, len, T->write_aeskey, 1) != len) {
       fail_connection (C, -1);
       return -1;
+    }
+
+    if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM) {
+      rwm_push_data (&c->out_p, "\r\n", 2);
     }
   }
 
@@ -331,6 +523,61 @@ int cpu_tcp_aes_crypto_ctr128_decrypt_input (connection_job_t C) /* {{{ */ {
           return -1;
         }
         vkprintf (2, "WS_INPUT: decrypted %d bytes, %d remaining in frame\n", len, c->ws_frame_remaining);
+      }
+      continue;
+    } else if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM) {
+      if (c->http_chunk_remaining == 0) {
+        if (c->http_chunk_header_state == 2) {
+          if (c->in_u.total_bytes < 2) {
+            return 0; /* need more data */
+          }
+          unsigned char crlf[2];
+          assert (rwm_fetch_lookup (&c->in_u, crlf, 2) == 2);
+          if (crlf[0] != '\r' || crlf[1] != '\n') {
+            vkprintf (1, "HTTP stream: expected trailing CRLF, got 0x%02x 0x%02x\n", crlf[0], crlf[1]);
+            fail_connection (C, -1);
+            return 0;
+          }
+          assert (rwm_skip_data (&c->in_u, 2) == 2);
+          c->http_chunk_header_state = 0;
+        }
+
+        if (c->http_chunk_header_state == 0) {
+          unsigned int chunk_size = 0;
+          int r = http_stream_chunk_header_parse (&c->in_u, &chunk_size);
+          if (r == 1) {
+            return 0; /* need more data */
+          }
+          if (r < 0) {
+            vkprintf (1, "HTTP stream: MALFORMED chunk header\n");
+            fail_connection (C, -1);
+            return 0;
+          }
+          if (chunk_size == 0) {
+            vkprintf (1, "HTTP stream: terminal chunk received, closing gracefully\n");
+            fail_connection (C, 0);
+            return 0;
+          }
+          c->http_chunk_remaining = (int)chunk_size;
+          c->http_chunk_header_state = 1;
+        }
+      }
+
+      int to_read = c->in_u.total_bytes;
+      if (c->http_chunk_remaining < to_read) {
+        to_read = c->http_chunk_remaining;
+      }
+      c->http_chunk_remaining -= to_read;
+      if (c->http_chunk_remaining == 0) {
+        c->http_chunk_header_state = 2;
+      }
+
+      if (to_read > 0) {
+        if (rwm_encrypt_decrypt_to (&c->in_u, &c->in, to_read, T->read_aeskey, 1) != to_read) {
+          fail_connection (C, -1);
+          return -1;
+        }
+        vkprintf (2, "HTTP stream: decrypted %d bytes, %d remaining in chunk\n", to_read, c->http_chunk_remaining);
       }
       continue;
     } else if (c->flags & C_IS_TLS) {

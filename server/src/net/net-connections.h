@@ -254,13 +254,26 @@ struct connection_info {
   int window_clamp;
   int left_tls_packet_length;
 
+/* Transport mode constants — placed before struct, not inside it. */
+#define TRANSPORT_MODE_WS          0  /* WebSocket framing (default) */
+#define TRANSPORT_MODE_HTTP_STREAM 1  /* HTTP chunked transfer framing */
+
+/* Number of pre-crypto bytes the server must accumulate before AES-CTR init:
+ * 4 (Session Header) + 64 (random_header) = 68 (spec/wire-format.md §3, §4.2). */
+#define T3_PRECRYPTO_BYTES 68
+
   // WebSocket state (Type3 transport: RFC 6455 frames behind nginx/CF edge).
   // Inactive and zero-cost for non-WS connections (ws_state==0).
   int ws_state;              // 0=not WS, 1=handshake pending, 2=active
+  int type3_dispatch_done;   // 1 if Type3 Session Header has been accepted
   int ws_frame_remaining;    // bytes remaining in current WS frame payload
   unsigned char ws_mask[4];  // current frame masking key (client→server)
   int ws_mask_offset;        // current offset into mask rotation
   int ws_frame_header_state; // partial header parse state
+
+  int transport_mode;        // 0=WS (default), 1=HTTP_STREAM
+  int http_chunk_remaining;   // bytes remaining in current chunk payload (signed; validated <= 65535)
+  int http_chunk_header_state; // 0=need header, 1=in payload, 2=need trailing CRLF
 
   struct raw_message in_u, in, out, out_p;
 
