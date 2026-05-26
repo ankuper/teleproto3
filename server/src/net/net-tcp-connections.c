@@ -65,9 +65,10 @@ int cpu_tcp_server_writer (connection_job_t C) /* {{{ */ {
     stop = 1;
     /* For HTTP stream connections, emit the terminal chunk before the final
      * flush so the client receives a clean end-of-stream signal (spec §5). */
-    if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM && c->crypto) {
+    if ((c->transport_mode == TRANSPORT_MODE_HTTP_STREAM || c->transport_mode == TRANSPORT_MODE_HTTP_STREAM_RAW) && c->crypto) {
       http_stream_write_terminal (C);
     }
+    /* Both modes need terminal chunk — nginx forwards it verbatim to client */
   }
   
   while (1) {
@@ -195,7 +196,7 @@ static int http_stream_chunk_header_parse (struct raw_message *rmsg, unsigned in
  */
 static void http_stream_write_terminal (connection_job_t C) {
   struct connection_info *c = CONN_INFO (C);
-  if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM) {
+  if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM || c->transport_mode == TRANSPORT_MODE_HTTP_STREAM_RAW) {
     rwm_push_data (&c->out_p, "0\r\n\r\n", 5);
     __sync_fetch_and_or (&c->flags, C_WANTWR);
     job_signal (JOB_REF_CREATE_PASS (C), JS_RUN);
@@ -280,6 +281,7 @@ int cpu_tcp_server_reader (connection_job_t C) /* {{{ */ {
     if (!raw) { break; }
 
     if (c->crypto || (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM && !c->crypto)) {
+      /* HTTP_STREAM (chunked) pre-crypto: bytes need chunk unwrap via in_u */
       rwm_union (&c->in_u, raw);
     } else {
       rwm_union (&c->in, raw);
@@ -296,6 +298,7 @@ int cpu_tcp_server_reader (connection_job_t C) /* {{{ */ {
       return -1;
     }
   }
+  /* HTTP_STREAM_RAW: no unwrap needed — bytes went to c->in directly, same as default */
 
   int r = c->in.total_bytes;
         
@@ -444,7 +447,7 @@ int cpu_tcp_aes_crypto_ctr128_encrypt_output (connection_job_t C) /* {{{ */ {
       }
       ws_write_frame_header (&c->out_p, len);
       vkprintf (2, "WS_OUTPUT: send binary frame len=%d\n", len);
-    } else if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM) {
+    } else if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM || c->transport_mode == TRANSPORT_MODE_HTTP_STREAM_RAW) {
       const int HTTP_MAX_CHUNK = 16384;
       if (len > HTTP_MAX_CHUNK) {
         len = HTTP_MAX_CHUNK;
@@ -468,7 +471,7 @@ int cpu_tcp_aes_crypto_ctr128_encrypt_output (connection_job_t C) /* {{{ */ {
       return -1;
     }
 
-    if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM) {
+    if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM || c->transport_mode == TRANSPORT_MODE_HTTP_STREAM_RAW) {
       rwm_push_data (&c->out_p, "\r\n", 2);
     }
   }

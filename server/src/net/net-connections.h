@@ -256,7 +256,8 @@ struct connection_info {
 
 /* Transport mode constants — placed before struct, not inside it. */
 #define TRANSPORT_MODE_WS          0  /* WebSocket framing (default) */
-#define TRANSPORT_MODE_HTTP_STREAM 1  /* HTTP chunked transfer framing */
+#define TRANSPORT_MODE_HTTP_STREAM 1  /* HTTP chunked transfer framing (direct connection) */
+#define TRANSPORT_MODE_HTTP_STREAM_RAW 2  /* HTTP raw stream — nginx stripped chunked framing */
 
 /* Number of pre-crypto bytes the server must accumulate before AES-CTR init:
  * 4 (Session Header) + 64 (random_header) = 68 (spec/wire-format.md §3, §4.2). */

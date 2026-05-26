@@ -1403,7 +1403,7 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
       if (c->in.total_bytes >= 4) {
         unsigned char peek4[4];
         assert (rwm_fetch_lookup (&c->in, peek4, 4) == 4);
-        if (memcmp (peek4, "POST", 4) == 0) {
+        if (memcmp (peek4, "POST", 4) == 0 || memcmp (peek4, "GET ", 3) == 0) {
           // Parse HTTP POST request headers
           int total = c->in.total_bytes;
           int peek_len = total < 4096 ? total : 4096;
@@ -1441,23 +1441,69 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
 
           vkprintf (1, "HTTP stream connection detected from %s:%d (Host: %s)\n", show_remote_ip (C), c->remote_port, host);
 
+          /* Detect whether client sent Transfer-Encoding: chunked.
+           * If present → TRANSPORT_MODE_HTTP_STREAM (parse chunked framing).
+           * If absent  → TRANSPORT_MODE_HTTP_STREAM_RAW (nginx stripped chunks,
+           *              raw obfs2 bytes follow POST headers directly). */
+          int has_chunked_te = 0;
+          {
+            char *te_hdr = strstr ((char *)peek_buf, "\r\nTransfer-Encoding:");
+            if (!te_hdr) te_hdr = strstr ((char *)peek_buf, "\r\ntransfer-encoding:");
+            if (te_hdr) {
+              te_hdr += 20; /* skip "\r\nTransfer-Encoding:" */
+              while (*te_hdr == ' ' || *te_hdr == '\t') te_hdr++;
+              if (strncasecmp (te_hdr, "chunked", 7) == 0) {
+                has_chunked_te = 1;
+              }
+            }
+          }
+
+          int transport = has_chunked_te ? TRANSPORT_MODE_HTTP_STREAM : TRANSPORT_MODE_HTTP_STREAM_RAW;
+          vkprintf (1, "HTTP stream transport mode: %s\n", has_chunked_te ? "CHUNKED" : "RAW (nginx-proxied)");
+
+          // Detect Upgrade: websocket header — if present, respond with 101
+          // to trigger nginx's WebSocket upgrade path (raw TCP pipe mode).
+          // Without 101, nginx stays in HTTP mode and buffers request body.
+          int has_upgrade_ws = 0;
+          {
+            const char *p2 = (const char *)peek_buf;
+            while (p2 < end - 18) {
+              if ((*p2 == 'U' || *p2 == 'u') && strncasecmp(p2, "Upgrade: websocket", 18) == 0) {
+                has_upgrade_ws = 1;
+                break;
+              }
+              /* skip to next header line */
+              while (p2 < end && *p2 != '\n') p2++;
+              if (p2 < end) p2++;
+            }
+          }
+
           // Consume request headers up to and including CRLF CRLF
           int consume = (int)(end - (char *)peek_buf) + 4;
           assert (rwm_skip_data (&c->in, consume) == consume);
 
-          // Send 200 OK response with chunked encoding headers
-          char response[] = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n";
-          int resp_len = sizeof(response) - 1;
-          rwm_push_data (&c->out, response, resp_len);
+          if (has_upgrade_ws) {
+            // 101 Switching Protocols — nginx enters raw TCP pipe mode
+            char response[] = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
+            int resp_len = sizeof(response) - 1;
+            rwm_push_data (&c->out, response, resp_len);
+            vkprintf (1, "HTTP stream: sent 101 Switching Protocols (nginx WS upgrade)\n");
+          } else {
+            // Direct connection (no nginx) — standard 200 OK with chunked
+            char response[] = "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\nCache-Control: no-store\r\n\r\n";
+            int resp_len = sizeof(response) - 1;
+            rwm_push_data (&c->out, response, resp_len);
+          }
           __sync_fetch_and_or (&c->flags, C_WANTWR);
           job_signal (JOB_REF_CREATE_PASS (C), JS_RUN);
 
           c->ws_state = WS_STATE_NONE; // We are NOT a WS connection
-          c->transport_mode = TRANSPORT_MODE_HTTP_STREAM;
+          c->transport_mode = transport;
           c->http_chunk_remaining = 0;
           c->http_chunk_header_state = 0;
 
-          if (c->in.total_bytes > 0) {
+          if (c->in.total_bytes > 0 && transport == TRANSPORT_MODE_HTTP_STREAM) {
+            /* Chunked mode: unwrap HTTP chunk framing from pre-crypto bytes */
             struct raw_message unwrapped;
             rwm_init (&unwrapped, 0);
             int needed = T3_PRECRYPTO_BYTES; /* Session Header (4) + random_header (64) */
@@ -1573,8 +1619,9 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
             rwm_union (&c->in_u, &c->in);
             c->in = unwrapped;
           }
+          /* RAW mode: no unwrapping needed — POST body bytes are raw obfs2 stream */
 
-          vkprintf (1, "HTTP stream handshake completed, sent response headers (%d bytes)\n", resp_len);
+          vkprintf (1, "HTTP stream handshake completed, sent response headers (upgrade=%d)\n", has_upgrade_ws);
 
           if (!c->in.total_bytes) {
             return NEED_MORE_BYTES;
@@ -1758,8 +1805,8 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
       }
       /* END AR-S2 dispatch hook */
 #endif /* TELEPROTO3_DISPATCH_HOOK */
-    } else if (c->transport_mode == TRANSPORT_MODE_HTTP_STREAM && !c->crypto) {
-      vkprintf (3, "HTTP_STREAM: pre-crypto check, in.total_bytes=%d\n", c->in.total_bytes);
+    } else if ((c->transport_mode == TRANSPORT_MODE_HTTP_STREAM || c->transport_mode == TRANSPORT_MODE_HTTP_STREAM_RAW) && !c->crypto) {
+      vkprintf (3, "HTTP_STREAM: pre-crypto check, in.total_bytes=%d, mode=%s\n", c->in.total_bytes, c->transport_mode == TRANSPORT_MODE_HTTP_STREAM ? "CHUNKED" : "RAW");
 
       if (c->in.total_bytes == 0) {
         return NEED_MORE_BYTES;
@@ -2131,7 +2178,7 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
         return 11; // waiting for dummy ChangeCipherSpec and first packet
       }
 
-      if (allow_only_tls && !(c->flags & C_IS_TLS)) {
+      if (allow_only_tls && !(c->flags & C_IS_TLS) && c->transport_mode != TRANSPORT_MODE_HTTP_STREAM && c->transport_mode != TRANSPORT_MODE_HTTP_STREAM_RAW) {
         vkprintf (1, "Expected TLS-transport\n");
         RETURN_TLS_ERROR(default_domain_info);
       }
@@ -2186,7 +2233,7 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
           unsigned tag = pr.tag;
           int secret_id = compact_to_slot[pr.secret_id];
 
-          if (tag != OBFS2_TAG_PAD && allow_only_tls) {
+          if (tag != OBFS2_TAG_PAD && allow_only_tls && c->transport_mode != TRANSPORT_MODE_HTTP_STREAM && c->transport_mode != TRANSPORT_MODE_HTTP_STREAM_RAW) {
             vkprintf (1, "Expected random padding mode\n");
             RETURN_TLS_ERROR(default_domain_info);
           }
@@ -2196,6 +2243,27 @@ int tcp_rpcs_compact_parse_execute (connection_job_t C) {
           assert (c->crypto);
           struct aes_crypto *T = c->crypto;
           evp_crypt (T->read_aeskey, random_header_ct, random_header_ct, 64);
+
+          /* HTTP stream transport: the HTTP 200 OK response was written to c->out
+           * as plain text BEFORE crypto was initialized (in the same parse_execute
+           * call that detects POST and reads the obfs2 handshake together).
+           *
+           * cpu_server_read_write runs reader() then writer() in the same JS_RUN.
+           * By the time writer runs, c->crypto is now set, so crypto_encrypt_output
+           * would AES-CTR-encrypt c->out — turning the 200 OK into garbage and
+           * causing nginx to return 502 Bad Gateway.
+           *
+           * Fix: move any pre-crypto plain-text output to c->out_p.  When
+           * crypto_encrypt_output later runs, it encrypts c->out (empty) and the
+           * writer then takes *raw = c->out_p, which contains the plain 200 OK
+           * followed by any encrypted MTProto data appended later.
+           *
+           * For WS and bare obfs2 connections c->out is always empty at this point
+           * (the 101/nothing was flushed in a prior JS_RUN), so this is a no-op. */
+          if (c->out.total_bytes > 0) {
+            rwm_union (&c->out_p, &c->out);
+            rwm_init (&c->out, 0);
+          }
 
           assert (rwm_skip_data (&c->in, 64) == 64);
           rwm_union (&c->in_u, &c->in);
