@@ -12,10 +12,11 @@
  */
 
 /*
- * Stability: Frozen for lib-v0.1.x. Adding a new function or a new
+ * Stability: Frozen for lib-v0.1.x (ABI levels 0.1.0–0.1.3). lib-v0.2.0
+ * adds padding/splitting API (Epic 11). Adding a new function or a new
  * field to t3_callbacks_t (beyond the forward-compat struct_size sentinel)
- * requires lib-v0.2.0. Adding a new enumerant to t3_result_t is permitted
- * in any lib-v0.1.x patch and consumers MUST treat unknown values as
+ * is permitted in minor bumps. Adding a new enumerant to t3_result_t is
+ * permitted in any patch and consumers MUST treat unknown values as
  * T3_ERR_INTERNAL. Little-endian byte order is normative for every
  * multi-byte field on the wire (cross-ref spec/wire-format.md §3).
  */
@@ -56,12 +57,12 @@ extern "C" {
 #endif
 
 #define T3_LIB_VERSION_MAJOR 0
-#define T3_LIB_VERSION_MINOR 1
-#define T3_LIB_VERSION_PATCH 3
+#define T3_LIB_VERSION_MINOR 2
+#define T3_LIB_VERSION_PATCH 0
 
 #define T3_ABI_VERSION_MAJOR 0
-#define T3_ABI_VERSION_MINOR 1
-#define T3_ABI_VERSION_PATCH 3
+#define T3_ABI_VERSION_MINOR 2
+#define T3_ABI_VERSION_PATCH 0
 
 /* MSVC's C++ frontend doesn't accept the C11 _Static_assert keyword. Pick the
    right keyword per language: static_assert in C++11+, _Static_assert in C11+,
@@ -184,6 +185,17 @@ typedef struct {
                                            * server handler MUST be gated by build flag + runtime config;
                                            * SHALL NOT appear in production traffic */
 
+/* ====================================================================
+ * Padding frame constants (spec/wire-format.md §2.1; Story 11-1 W-004)
+ * ==================================================================== */
+#define T3_FLAG_PADDING    0x0001u  /* Session Header flags bit 0 (§3) */
+#define T3_PADDING_MARKER  0xFEu    /* First decrypted byte of a padding frame (§2.1) */
+
+typedef enum {
+    T3_TRANSPORT_WS          = 0,
+    T3_TRANSPORT_HTTP_STREAM = 1
+} t3_transport_mode_t;
+
 #if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L) || defined(__cplusplus)
 T3_STATIC_ASSERT(sizeof(t3_header_t) == 4,
                  "t3_header_t must be exactly 4 bytes (no padding) — wire shape frozen since v0.1.0");
@@ -231,6 +243,7 @@ T3_API t3_result_t t3_secret_serialise(const t3_secret_fields *in, uint8_t *out,
 T3_API t3_result_t t3_secret_validate_host(const char *host);
 T3_API t3_result_t t3_secret_validate_path(const char *path);
 T3_API void        t3_secret_zeroise(t3_secret_fields *fields);
+T3_API int         t3_secret_transport_mode(const t3_secret_t *s);
 
 /* ====================================================================
  * Session management  (spec/wire-format.md §1)
@@ -265,6 +278,30 @@ T3_API t3_result_t      t3_retry_record_close(t3_session_t *sess,
                                               t3_retry_state_t *out_state);
 T3_API t3_retry_state_t t3_retry_get_state(const t3_session_t *sess);
 T3_API t3_result_t      t3_retry_user_retry(t3_session_t *sess);
+
+/* ====================================================================
+ * Padding and splitting (spec/wire-format.md §2.1; Epic 11)
+ * ==================================================================== */
+T3_API t3_result_t t3_padding_generate(t3_session_t *sess,
+                                       uint8_t *buf, size_t min_len,
+                                       size_t max_len, size_t *out_len);
+
+static inline int t3_padding_detect(uint8_t first_decrypted_byte) {
+    return first_decrypted_byte == T3_PADDING_MARKER;
+}
+
+T3_API t3_result_t t3_split_plan(t3_session_t *sess,
+                                 size_t total_len,
+                                 size_t min_chunk, size_t max_chunk,
+                                 size_t *plan, size_t max_chunks,
+                                 size_t *out_count);
+
+/* ====================================================================
+ * HTTP stream framing (spec/wire-format.md §2.2; Epic 12)
+ * ==================================================================== */
+T3_API t3_result_t t3_http_chunk_write(uint8_t *out, size_t out_cap, const uint8_t *data, size_t data_len, size_t *out_written);
+T3_API t3_result_t t3_http_chunk_parse(const uint8_t *buf, size_t buf_len, const uint8_t **out_data, size_t *out_data_len, size_t *out_consumed);
+T3_API t3_result_t t3_http_chunk_write_terminal(uint8_t *out, size_t out_cap, size_t *out_written);
 
 /* ====================================================================
  * Utility
