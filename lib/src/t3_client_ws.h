@@ -8,6 +8,10 @@
 #include <stddef.h>
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Write a masked WS binary frame.
  * Returns 0 on success, -1 on error. */
 int t3c_ws_frame_write(const uint8_t *payload, size_t payload_len,
@@ -25,5 +29,9 @@ int t3c_ws_frame_read(const uint8_t *buf, size_t buf_len,
 int t3c_ws_upgrade_request(const char *host, const char *path,
                            uint8_t *out, size_t out_cap, size_t *out_len,
                            uint8_t ws_key_out[24]);
+
+#ifdef __cplusplus
+}  /* extern "C" */
+#endif
 
 #endif /* T3_CLIENT_WS_H */

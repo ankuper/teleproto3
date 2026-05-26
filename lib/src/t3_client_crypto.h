@@ -6,6 +6,10 @@
 
 #include <stdint.h>
 #include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <openssl/evp.h>
 
 /* AES-CTR context wrapper */
@@ -33,5 +37,9 @@ int t3c_aes_crypt(t3c_aes_ctx *ctx, const uint8_t *in, uint8_t *out, size_t len)
 
 /* Free AES context resources. */
 void t3c_aes_ctx_free(t3c_aes_ctx *ctx);
+
+#ifdef __cplusplus
+}  /* extern "C" */
+#endif
 
 #endif /* T3_CLIENT_CRYPTO_H */
