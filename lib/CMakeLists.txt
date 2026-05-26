@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(teleproto3 LANGUAGES C VERSION 0.1.2)
+project(teleproto3 LANGUAGES C VERSION 0.2.0)
 
 # -----------------------------------------------------------------------
 # Build options (set via -D on the cmake command line)
@@ -101,8 +101,10 @@ endif()
 # -----------------------------------------------------------------------
 set(_T3_SOURCES
     src/t3_abi_version.c
+    src/t3_http_stream.c
     src/t3_keyderiv.c
     src/t3_obfuscated2.c
+    src/t3_padding.c
     src/t3_retry.c
     src/t3_secret.c
     src/t3_session_header.c
@@ -110,6 +112,10 @@ set(_T3_SOURCES
     src/t3_timing.c
     src/t3_url_parser.c
     src/csprng/t3_csprng_${T3_CSPRNG_BACKEND_RESOLVED}.c
+    # Client-side transport (Epic 13: t3_client API)
+    src/t3_client_crypto.c
+    src/t3_client_ws.c
+    src/t3_client_stream.c
 )
 
 if(T3_SHIM_SOCKS5)
@@ -129,12 +135,13 @@ target_include_directories(teleproto3
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 # -----------------------------------------------------------------------
 # Link libraries
 # -----------------------------------------------------------------------
-target_link_libraries(teleproto3 PUBLIC OpenSSL::Crypto)
+target_link_libraries(teleproto3 PUBLIC OpenSSL::Crypto OpenSSL::SSL)
 
 if(T3_SHIM_SOCKS5)
     # Shim uses TLS (SSL_CTX, SSL_connect …); OpenSSL::Crypto alone is insufficient.
@@ -329,6 +336,46 @@ if(T3_BUILD_TESTS)
             )
         endif()
     endif()
+
+    # Padding and splitting unit tests (Story 11-3)
+    add_executable(test_padding tests/unit/test_padding.c)
+    target_include_directories(test_padding PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
+    )
+    target_link_libraries(test_padding PRIVATE teleproto3)
+    target_compile_features(test_padding PRIVATE c_std_11)
+    if(NOT MSVC)
+        target_compile_options(test_padding PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME padding COMMAND test_padding)
+
+    # HTTP stream framing unit tests (Story 12-3)
+    add_executable(test_http_stream tests/unit/test_http_stream.c)
+    target_include_directories(test_http_stream PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
+    )
+    target_link_libraries(test_http_stream PRIVATE teleproto3)
+    target_compile_features(test_http_stream PRIVATE c_std_11)
+    if(NOT MSVC)
+        target_compile_options(test_http_stream PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME http_stream COMMAND test_http_stream)
+
+    # t3_client API unit tests (Epic 13)
+    add_executable(test_t3_client tests/unit/test_t3_client.c)
+    target_include_directories(test_t3_client PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+    target_link_libraries(test_t3_client PRIVATE teleproto3)
+    target_compile_features(test_t3_client PRIVATE c_std_11)
+    if(NOT MSVC)
+        target_compile_options(test_t3_client PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+    add_test(NAME t3_client COMMAND test_t3_client)
 endif()
 
 # -----------------------------------------------------------------------
