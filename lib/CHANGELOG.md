@@ -23,6 +23,43 @@ declares the `spec-vX.Y.Z` range it implements — see `VERSION`.
 Additive C API only — `t3_shim_open` signature unchanged. ABI patch bump
 will be applied at the next release tag.
 
+## [lib-v0.4.0] — 2026-05-27
+
+### Added
+- **Client-side transport API** (`t3_client.h`): `t3_client_connect`,
+  `t3_client_wrap`, `t3_client_unwrap`, `t3_client_close` — abstraction for
+  establishing Type3 connections from client code. Supports both WebSocket
+  and HTTP stream transport modes. Used by the tdlib Type3 integration.
+  (Epic 13, Stories 13-1 through 13-4.)
+- **HTTP stream framing** (`t3_http_stream.c`): HTTP chunked transfer
+  encoding for POST-based transport mode. Implements `Transfer-Encoding:
+  chunked` framing for both request and response directions. ТСПУ-resistant
+  — traffic looks like a normal HTTPS POST to a REST API.
+  (Epic 12, Story 12-2.)
+- **Client WebSocket framing** (`t3_client_ws.c`): WebSocket frame write
+  (masked per RFC 6455 §5.3) and read for client-side use.
+- **Client crypto** (`t3_client_crypto.c`): obfs2 KDF + AES-256-CTR key
+  derivation ported from server to client. Shared by both transport modes.
+- `extern "C"` guards on internal headers (`t3_client_crypto.h`,
+  `t3_client_ws.h`) for C++ consumers (tdlib).
+- Padding/transport mode enums in `t3.h` (`T3_TRANSPORT_WEBSOCKET`,
+  `T3_TRANSPORT_HTTP_STREAM`).
+
+### Stability note
+New public header `t3_client.h` — ABI additive. Existing `t3.h` surface
+unchanged. `T3_ABI_VERSION_MINOR` bumped `1 → 4`.
+
+### Changed
+- The shim's loopback SOCKS5 listener REQUIRES RFC 1929 USERNAME/PASSWORD
+  authentication (method 0x02). NO-AUTH (method 0x00) is no longer accepted.
+  Credentials are auto-generated per shim spawn; callers retrieve them via
+  `t3_shim_get_credentials()`. This is defense against other local processes
+  hijacking the loopback listener and tunneling traffic through Type3.
+
+### Stability note
+Additive C API only — `t3_shim_open` signature unchanged. ABI patch bump
+will be applied at the next release tag.
+
 ## [lib-v0.1.3] — 2026-05-12
 
 ### Added

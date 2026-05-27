@@ -1,13 +1,13 @@
 # teleproto3
 
-**Type3** (`mtProxy3`) is a censorship-resistant transport for [Telegram Messenger](https://telegram.org): it tunnels MTProto over WebSocket-upgraded HTTPS to bypass DPI-based blocking.
+**Type3** (`mtProxy3`) is a censorship-resistant transport for [Telegram Messenger](https://telegram.org): it tunnels MTProto over HTTPS — either via WebSocket upgrade or HTTP POST with chunked transfer encoding — to bypass DPI-based blocking.
 
 This repository contains:
 
 | Directory | Contents |
 |-----------|----------|
 | `spec/` | Normative protocol specification |
-| `lib/` | Reference C implementation (`libteleproto3 v0.1.0`) |
+| `lib/` | Reference C implementation (`libteleproto3 v0.4.0`) |
 | `server/` | Server — fork of the official Telegram MTProxy with Type3 transport added |
 | `conformance/` | Language-agnostic test harness and protocol vectors |
 
@@ -17,8 +17,9 @@ This repository contains:
 
 ## How it works
 
-A Type3 connection is layered as:
+A Type3 connection supports two transport modes:
 
+**WebSocket mode** (default):
 ```
 Client
   └── TLS 1.2/1.3
@@ -28,7 +29,19 @@ Client
                           └── Telegram DC
 ```
 
-TLS terminates on an nginx (or equivalent) reverse proxy. The proxy forwards the WebSocket connection to the Type3 server on a local port. The server handles WebSocket framing, key derivation, and the MTProto relay. The obfuscation stream sits **inside** WebSocket frames — WebSocket headers are plaintext to nginx; only the payload is encrypted.
+**HTTP stream mode** (ТСПУ-resistant):
+```
+Client
+  └── TLS 1.2/1.3
+        └── HTTP/1.1 POST + Transfer-Encoding: chunked
+              └── Session Header (4 bytes, little-endian)
+                    └── obfuscated-2 MTProto (AES-256-CTR)
+                          └── Telegram DC
+```
+
+TLS terminates on an nginx (or equivalent) reverse proxy. The proxy forwards the connection to the Type3 server on a local port. The server auto-detects the transport mode by inspecting the HTTP request line (`GET` → WebSocket, `POST` → HTTP stream). The obfuscation stream sits **inside** the transport frames — transport headers are plaintext to nginx; only the payload is encrypted.
+
+HTTP stream mode looks like a normal HTTPS POST to a REST API, making it resistant to WebSocket-specific DPI fingerprinting. See [`spec/wire-format.md` §1.3–§1.4](spec/wire-format.md) for the full specification and nginx configuration requirements.
 
 ---
 
@@ -134,12 +147,34 @@ const char *t3_strerror(t3_result_t rc);
 const char *t3_abi_version_string(void);
 ```
 
+### Client-side transport API (`t3_client.h`)
+
+Added in `v0.3.0`. Provides a client-side abstraction for establishing Type3 connections:
+
+```c
+#include "t3_client.h"
+
+// Connect to a Type3 server via TLS + WebSocket or HTTP stream
+t3_client_conn_t *conn = NULL;
+t3_result_t rc = t3_client_connect(secret, T3_TRANSPORT_WEBSOCKET, &conn);
+
+// Wrap outgoing MTProto packet for transport
+t3_client_wrap(conn, plaintext, len, &wire_out, &wire_len);
+
+// Unwrap incoming transport frame to MTProto packet
+t3_client_unwrap(conn, wire_in, wire_len, &plain_out, &plain_len);
+
+t3_client_close(conn);
+```
+
+See `lib/src/t3_client_stream.c`, `t3_client_ws.c`, `t3_http_stream.c` for the implementation.
+
 ### ABI stability
 
 | Version | Rule |
 |---------|------|
 | `lib-v0.1.x` | ABI frozen. New enumerants in `t3_result_t` are permitted; consumers **MUST** treat unknown values as `T3_ERR_INTERNAL`. |
-| `lib-v0.2.0` | Required for any new function or new field in `t3_callbacks_t`. |
+| `lib-v0.2.0+` | New functions (`t3_client_*`), new fields in `t3_callbacks_t`, HTTP stream framing. |
 
 ### Build
 
@@ -183,8 +218,13 @@ A language-agnostic harness that drives any Type3 implementation through the nor
 teleproto3/
 ├── spec/           Normative protocol specification (Apache 2.0)
 ├── lib/            libteleproto3 — reference C implementation
-│   ├── include/    Public header: t3.h (stable ABI)
+│   ├── include/    Public headers: t3.h, t3_client.h, t3_features.h
 │   ├── src/        Private implementation
+│   │   ├── t3_client_stream.c   Client transport abstraction
+│   │   ├── t3_client_ws.c       WebSocket frame write (masked) + read
+│   │   ├── t3_http_stream.c     HTTP chunked stream framing
+│   │   ├── t3_client_crypto.c   obfs2 KDF + AES-CTR
+│   │   └── ...                  Core library sources
 │   ├── tests/      Unit + integration tests
 │   ├── build/      POSIX Makefile + Bazel BUILD
 │   └── CHANGELOG.md

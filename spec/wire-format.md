@@ -163,6 +163,56 @@ The Type3 server is designed to co-exist with a standard web server on port 443 
 *   `proxy_buffering off;` — disables buffering of upstream responses, passing bytes to the client immediately.
 *   `client_max_body_size 0;` — permits infinite chunked POST requests for long-lived streaming connections.
 *   `proxy_read_timeout 86400s;` and `proxy_send_timeout 86400s;` — **REQUIRED** for long-lived HTTP stream sessions. Without these, nginx will close idle connections after its default 60-second timeout, terminating the transport session mid-stream. Set to at least the expected maximum session lifetime.
+*   `ssl_buffer_size 4k;` — **RECOMMENDED** in the `server` or `location` context. The default nginx `ssl_buffer_size` (16 KB) coalesces small HTTP responses into a single TLS record. For HTTP stream mode, the server's initial `200 OK` response headers (~120 bytes) may be held in the TLS write buffer until the next upstream data arrives, causing the client to stall waiting for the terminal `\r\n\r\n`. Reducing `ssl_buffer_size` to 4 KB (or 1 KB for lowest latency) forces nginx to flush TLS records promptly.
+
+**Reference nginx location block** (HTTP stream mode, production-ready):
+
+```nginx
+location /api/v1/data {
+    proxy_pass http://127.0.0.1:<type3_port>;
+    proxy_http_version 1.1;
+
+    proxy_set_header Host $host;
+    proxy_set_header Connection "";
+
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_cache off;
+    client_max_body_size 0;
+
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+}
+
+# At the server level:
+ssl_buffer_size 4k;
+```
+
+**Combined location block** (WebSocket + HTTP stream on the same path):
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ""      close;
+}
+
+location /v1/api/mtpr {
+    proxy_pass http://127.0.0.1:<type3_port>;
+    proxy_http_version 1.1;
+
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_set_header Host $host;
+
+    proxy_request_buffering off;
+    proxy_buffering off;
+    proxy_cache off;
+    client_max_body_size 0;
+
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+}
+```
 
 This deployment model is documented in <!-- ban-list-allow:doc-reference --> `docs/mtproxy3-architecture.md` <!-- /ban-list-allow -->. Direct TLS termination by the Type3 server itself (without a frontend reverse proxy) is equally conforming (FR1, NFR-S).
 
