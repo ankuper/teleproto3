@@ -1,0 +1,19 @@
+# rebase.config.ios — per-repo constants for rebase-upstream.sh
+# Source: ankuper/Telegram-iOS fork (not yet active)
+
+UPSTREAM_URL="https://github.com/TelegramMessenger/Telegram-iOS.git"
+UPSTREAM_BRANCH="master"                       # upstream HEAD branch
+SUPPORT_BRANCH="teleproto3-support"
+BRAND_BRANCH="t3chatm"
+CLONE_DIR="/Volumes/BuildCache/Telegram-iOS"
+
+# Files we patch in upstream code — conflict surfaces.
+PATCHED_FILES=(
+  submodules/MtProtoKit/Sources/MTTcpConnection.m
+)
+
+# iOS: verify DEBUG_PREFIX_MAP in xcconfig to prevent path leaks
+CHECK_DEBUG_PREFIX_MAP=true
+DEBUG_PREFIX_MAP_FILES=(
+  Telegram/Telegram-iOS/Configuration/Release.xcconfig
+)

@@ -1,0 +1,32 @@
+# rebase.config.tdesktop — per-repo constants for rebase-upstream.sh
+# Source: ankuper/tdesktop fork
+
+UPSTREAM_URL="https://github.com/telegramdesktop/tdesktop.git"
+UPSTREAM_BRANCH="dev"                          # upstream HEAD branch
+SUPPORT_BRANCH="teleproto3-support"
+BRAND_BRANCH="t3chatm"
+CLONE_DIR="/Volumes/BuildCache/tdesktop/tdesktop"
+
+# Files we patch in upstream code — primary conflict surfaces.
+# New files we add (connection_teleproto3.cpp etc.) are NOT listed
+# because they can't conflict with upstream.
+PATCHED_FILES=(
+  Telegram/CMakeLists.txt
+  Telegram/SourceFiles/boxes/connection_box.cpp
+  Telegram/SourceFiles/boxes/connection_box.h
+  Telegram/SourceFiles/calls/calls_call.cpp
+  Telegram/SourceFiles/calls/calls_call.h
+  Telegram/SourceFiles/calls/calls_instance.cpp
+  Telegram/SourceFiles/core/application.cpp
+  Telegram/SourceFiles/core/core_settings_proxy.cpp
+  Telegram/SourceFiles/lang/lang_keys.h
+  Telegram/SourceFiles/main/main_account.cpp
+  Telegram/SourceFiles/mtproto/connection_abstract.cpp
+  Telegram/SourceFiles/mtproto/connection_abstract.h
+  Telegram/SourceFiles/mtproto/connection_tcp.cpp
+  Telegram/SourceFiles/mtproto/mtproto_proxy_data.cpp
+  CMakeLists.txt
+)
+
+# iOS-specific checks (not applicable here)
+CHECK_DEBUG_PREFIX_MAP=false

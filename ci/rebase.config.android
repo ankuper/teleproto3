@@ -1,0 +1,16 @@
+# rebase.config.android — per-repo constants for rebase-upstream.sh
+# Source: ankuper/Telegram-Android fork
+
+UPSTREAM_URL="https://github.com/DrKLO/Telegram.git"
+UPSTREAM_BRANCH="master"                       # upstream HEAD branch
+SUPPORT_BRANCH="teleproto3-support"
+BRAND_BRANCH="t3chatm"
+CLONE_DIR="/Volumes/BuildCache/Telegram-Android"
+
+# Files we patch in upstream code — conflict surfaces.
+PATCHED_FILES=(
+  TMessagesProj/src/main/java/org/telegram/ui/ProxySettingsActivity.java
+  TMessagesProj/src/main/res/values/strings.xml
+)
+
+CHECK_DEBUG_PREFIX_MAP=false
