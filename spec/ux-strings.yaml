@@ -158,10 +158,10 @@ strings:
     verified: false
 
   ui.tier3-toast:
-    en: "Connection downgraded — proxy is overloaded"
-    ru: "Соединение снижено — прокси перегружен"
-    fa: "اتصال کاهش یافت — پروکسی بارگذاری بیش از حد"
-    zh: "连接已降级 — 代理过载"
+    en: "Connection downgraded — server is overloaded"
+    ru: "Соединение снижено — сервер перегружен"
+    fa: "اتصال کاهش یافت — سرور بارگذاری بیش از حد"
+    zh: "连接已降级 — 服务器过载"
     pronunciation_context: statement
     max_utterance_length_ms: 2000
     interruption_behavior: queue
