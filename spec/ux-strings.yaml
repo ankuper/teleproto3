@@ -157,6 +157,16 @@ strings:
     interruption_behavior: queue
     verified: false
 
+  ui.tier3-toast:
+    en: "Connection downgraded — proxy is overloaded"
+    ru: "Соединение снижено — прокси перегружен"
+    fa: "اتصال کاهش یافت — پروکسی بارگذاری بیش از حد"
+    zh: "连接已降级 — 代理过载"
+    pronunciation_context: statement
+    max_utterance_length_ms: 2000
+    interruption_behavior: queue
+    verified: false
+
   # ===== Secure-storage error (story 2.4 prerequisite) =====
   # Shown when OS-native secure storage is unavailable.
 
