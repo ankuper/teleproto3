@@ -103,7 +103,7 @@ for ABI in "${ABI_LIST[@]}"; do
     ABI="$(printf '%s' "$ABI" | tr -d '[:space:]')"
     [[ -n "$ABI" ]] || continue
 
-    printf '--- Building ABI: %s ---\n' "$ABI"
+    echo "--- Building ABI: $ABI ---"
 
     # Validate per-ABI BoringSSL libraries
     SSL_LIB="$BORINGSSL/lib/$ABI/libssl.a"
@@ -183,7 +183,7 @@ for ABI in "${ABI_LIST[@]}"; do
 done
 
 # ── Summary ────────────────────────────────────────────────────────────────────
-printf '=== build-android.sh complete ===\n'
+echo "=== build-android.sh complete ==="
 printf 'Output files:\n'
 for f in "${BUILT[@]}"; do
     SIZE="$(wc -c < "$f" | tr -d ' ')"
