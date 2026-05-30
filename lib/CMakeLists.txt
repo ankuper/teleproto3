@@ -95,13 +95,36 @@ message(STATUS "teleproto3: CSPRNG backend = ${T3_CSPRNG_BACKEND_RESOLVED}")
 # OpenSSL — required for key derivation and AES-256-CTR framing
 # (t3_keyderiv.c and t3_obfuscated2.c are stubs in lib v0.1.0;
 # find_package is wired now so platform stories do not need to touch CMake)
+#
+# Android / BoringSSL bypass: if the caller pre-seeds all three variables
+# (OPENSSL_INCLUDE_DIR, OPENSSL_SSL_LIBRARY, OPENSSL_CRYPTO_LIBRARY), we
+# create the imported targets directly and skip find_package. This lets NDK
+# cross-compilation use Telegram's pre-built BoringSSL without a version check.
 # -----------------------------------------------------------------------
-find_package(OpenSSL 3.0 QUIET)
-if(NOT OpenSSL_FOUND)
-    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-        message(FATAL_ERROR "teleproto3: OpenSSL 3.0 not found. macOS users should run 'brew install openssl@3' and pass -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3) to CMake.")
-    else()
-        message(FATAL_ERROR "teleproto3: OpenSSL 3.0 not found. Please install libssl-dev or equivalent.")
+if(DEFINED OPENSSL_SSL_LIBRARY AND DEFINED OPENSSL_CRYPTO_LIBRARY AND DEFINED OPENSSL_INCLUDE_DIR)
+    message(STATUS "teleproto3: using pre-seeded OpenSSL/BoringSSL targets")
+    if(NOT TARGET OpenSSL::Crypto)
+        add_library(OpenSSL::Crypto STATIC IMPORTED GLOBAL)
+        set_target_properties(OpenSSL::Crypto PROPERTIES
+            IMPORTED_LOCATION             "${OPENSSL_CRYPTO_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}"
+        )
+    endif()
+    if(NOT TARGET OpenSSL::SSL)
+        add_library(OpenSSL::SSL STATIC IMPORTED GLOBAL)
+        set_target_properties(OpenSSL::SSL PROPERTIES
+            IMPORTED_LOCATION             "${OPENSSL_SSL_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${OPENSSL_INCLUDE_DIR}"
+        )
+    endif()
+else()
+    find_package(OpenSSL 3.0 QUIET)
+    if(NOT OpenSSL_FOUND)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+            message(FATAL_ERROR "teleproto3: OpenSSL 3.0 not found. macOS users should run 'brew install openssl@3' and pass -DOPENSSL_ROOT_DIR=$(brew --prefix openssl@3) to CMake.")
+        else()
+            message(FATAL_ERROR "teleproto3: OpenSSL 3.0 not found. Please install libssl-dev or equivalent.")
+        endif()
     endif()
 endif()
 
