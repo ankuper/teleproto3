@@ -1,0 +1,102 @@
+# build-android-ci.yml — cross-compile libteleproto3.a for Android ABIs.
+#
+# Triggers: push to main, workflow_dispatch.
+# NDK: 21.4.7075529 (matches Telegram-Android; minSdk 21).
+# BoringSSL: sparse-checkout from ankuper/Telegram-Android.
+# Artifacts: per-ABI libteleproto3.a uploaded for 7 days.
+
+name: build-android
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    env:
+      NDK_VERSION: "21.4.7075529"
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      BORINGSSL_DIR: /tmp/tg-android/TMessagesProj/jni/boringssl
+      OUT_DIR: /tmp/teleproto3-android
+
+    steps:
+      - name: Checkout teleproto3
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install NDK via sdkmanager
+        run: |
+          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" \
+              "ndk;${NDK_VERSION}" \
+          || true
+          NDK_PATH="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
+          if [[ ! -d "$NDK_PATH" ]]; then
+            echo "error: NDK not found at $NDK_PATH after install" >&2
+            exit 1
+          fi
+          echo "NDK_ROOT=${NDK_PATH}" >> "$GITHUB_ENV"
+
+      - name: Sparse-checkout BoringSSL from Telegram-Android
+        run: |
+          git clone \
+            --depth=1 \
+            --no-checkout \
+            https://github.com/ankuper/Telegram-Android.git \
+            /tmp/tg-android
+          cd /tmp/tg-android
+          git sparse-checkout set TMessagesProj/jni/boringssl
+          git checkout
+
+      - name: Verify BoringSSL layout
+        run: |
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            for lib in libssl.a libcrypto.a; do
+              path="${BORINGSSL_DIR}/lib/${abi}/${lib}"
+              if [[ ! -f "$path" ]]; then
+                echo "error: missing $path" >&2
+                exit 1
+              fi
+            done
+          done
+          echo "BoringSSL layout OK"
+
+      - name: Build libteleproto3.a for all ABIs
+        run: |
+          chmod +x ci/build-android.sh
+          ci/build-android.sh \
+            --ndk      "${NDK_ROOT}" \
+            --boringssl "${BORINGSSL_DIR}" \
+            --out      "${OUT_DIR}" \
+            --abis     "arm64-v8a,armeabi-v7a,x86_64"
+
+      - name: Upload arm64-v8a artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-arm64-v8a
+          path: /tmp/teleproto3-android/arm64-v8a/libteleproto3.a
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload armeabi-v7a artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-armeabi-v7a
+          path: /tmp/teleproto3-android/armeabi-v7a/libteleproto3.a
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload x86_64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-x86_64
+          path: /tmp/teleproto3-android/x86_64/libteleproto3.a
+          retention-days: 7
+          if-no-files-found: error
