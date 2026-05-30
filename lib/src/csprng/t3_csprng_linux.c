@@ -7,12 +7,17 @@
  * Story 1-12 implementation.
  */
 
-#if !defined(__linux__)
-#error "t3_csprng_linux.c must only be compiled on Linux"
+#if !defined(__linux__) && !defined(__ANDROID__)
+#error "t3_csprng_linux.c must only be compiled on Linux or Android"
 #endif
 
+/* getrandom(2) is available on Linux glibc ≥2.25 + kernel ≥3.17.
+ * On Android it requires API ≥ 28; for earlier targets we always use
+ * the /dev/urandom fallback (urandom_fill below). */
+#if !defined(__ANDROID__)
 #define _GNU_SOURCE
 #include <sys/random.h>
+#endif
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
@@ -49,6 +54,10 @@ static t3_result_t urandom_fill(uint8_t *buf, size_t len) {
 }
 
 t3_result_t t3_csprng_bytes(uint8_t *buf, size_t len) {
+#if defined(__ANDROID__)
+    /* Android API < 28 has no getrandom(); /dev/urandom is always available. */
+    return urandom_fill(buf, len);
+#else
     size_t done = 0;
     while (done < len) {
         ssize_t n = getrandom(buf + done, len - done, GRND_NONBLOCK);
@@ -72,4 +81,5 @@ t3_result_t t3_csprng_bytes(uint8_t *buf, size_t len) {
         done += (size_t)n;
     }
     return T3_OK;
+#endif /* !__ANDROID__ */
 }
