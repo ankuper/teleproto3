@@ -49,6 +49,16 @@ option(T3_HARDENING
      -D_FORTIFY_SOURCE=2 -fno-strict-aliasing -fno-omit-frame-pointer"
     OFF)
 
+option(T3_BUILD_CLIENT
+    "Build client-side transport layer (t3_client API)"
+    OFF)
+
+# Force enable client build if tests are requested on non-Windows platforms.
+if(T3_BUILD_TESTS AND NOT WIN32)
+    set(T3_BUILD_CLIENT ON CACHE BOOL "Build client-side transport layer" FORCE)
+endif()
+
+
 # -----------------------------------------------------------------------
 # Per-platform CSPRNG backend selection
 # -----------------------------------------------------------------------
@@ -112,11 +122,17 @@ set(_T3_SOURCES
     src/t3_timing.c
     src/t3_url_parser.c
     src/csprng/t3_csprng_${T3_CSPRNG_BACKEND_RESOLVED}.c
-    # Client-side transport (Epic 13: t3_client API)
-    src/t3_client_crypto.c
-    src/t3_client_ws.c
-    src/t3_client_stream.c
 )
+
+if(T3_BUILD_CLIENT)
+    list(APPEND _T3_SOURCES
+        # Client-side transport (Epic 13: t3_client API)
+        src/t3_client_crypto.c
+        src/t3_client_ws.c
+        src/t3_client_stream.c
+    )
+endif()
+
 
 if(T3_SHIM_SOCKS5)
     list(APPEND _T3_SOURCES src/shim_socks5.c)
@@ -139,9 +155,12 @@ target_include_directories(teleproto3
 )
 
 # -----------------------------------------------------------------------
-# Link libraries
-# -----------------------------------------------------------------------
-target_link_libraries(teleproto3 PUBLIC OpenSSL::Crypto OpenSSL::SSL)
+target_link_libraries(teleproto3 PUBLIC OpenSSL::Crypto)
+
+if(T3_BUILD_CLIENT OR T3_SHIM_SOCKS5)
+    target_link_libraries(teleproto3 PUBLIC OpenSSL::SSL)
+endif()
+
 
 if(T3_SHIM_SOCKS5)
     # Shim uses TLS (SSL_CTX, SSL_connect …); OpenSSL::Crypto alone is insufficient.
@@ -364,18 +383,21 @@ if(T3_BUILD_TESTS)
     add_test(NAME http_stream COMMAND test_http_stream)
 
     # t3_client API unit tests (Epic 13)
-    add_executable(test_t3_client tests/unit/test_t3_client.c)
-    target_include_directories(test_t3_client PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
-        ${CMAKE_CURRENT_SOURCE_DIR}/src
-    )
-    target_link_libraries(test_t3_client PRIVATE teleproto3)
-    target_compile_features(test_t3_client PRIVATE c_std_11)
-    if(NOT MSVC)
-        target_compile_options(test_t3_client PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    if(T3_BUILD_CLIENT)
+        add_executable(test_t3_client tests/unit/test_t3_client.c)
+        target_include_directories(test_t3_client PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(test_t3_client PRIVATE teleproto3)
+        target_compile_features(test_t3_client PRIVATE c_std_11)
+        if(NOT MSVC)
+            target_compile_options(test_t3_client PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+        add_test(NAME t3_client COMMAND test_t3_client)
     endif()
-    add_test(NAME t3_client COMMAND test_t3_client)
+
 endif()
 
 # -----------------------------------------------------------------------
