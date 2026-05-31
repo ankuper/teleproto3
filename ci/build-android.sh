@@ -24,7 +24,7 @@
 set -euo pipefail
 
 # ── Defaults ───────────────────────────────────────────────────────────────────
-DEFAULT_ABIS="arm64-v8a,armeabi-v7a,x86_64"
+DEFAULT_ABIS="arm64-v8a,armeabi-v7a,x86,x86_64"
 ANDROID_PLATFORM="android-21"
 
 NDK=""
