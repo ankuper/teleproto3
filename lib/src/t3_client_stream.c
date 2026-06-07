@@ -418,35 +418,7 @@ static int handle_ws_upgrade(t3_client_stream *s) {
 }
 
 /* ── Handle HTTP POST response ──────────────────────────────────────── */
-static int handle_http_response(t3_client_stream *s) {
-    const uint8_t *ptr;
-    size_t avail = ring_read_ptr(&s->in_ring, &ptr);
-    if (avail < 12) return 1;
-
-    /* Find \r\n\r\n */
-    const uint8_t *end = NULL;
-    for (size_t i = 0; i + 3 < avail; i++) {
-        if (ptr[i] == '\r' && ptr[i+1] == '\n' && ptr[i+2] == '\r' && ptr[i+3] == '\n') {
-            end = ptr + i + 4;
-            break;
-        }
-    }
-    if (!end) {
-        if (avail > 4096) return -1;
-        return 1;
-    }
-
-    /* Accept any 2xx */
-    if (avail >= 12 && memcmp(ptr, "HTTP/1.1 2", 10) == 0) {
-        ring_consume(&s->in_ring, (size_t)(end - ptr));
-        s->http_response_done = 1;
-        return 0;
-    }
-
-    snprintf(s->last_error, sizeof(s->last_error),
-             "HTTP response not 2xx");
-    return -1;
-}
+/* handle_http_response removed — response header parsing is now inline in pump() */
 
 /* ── Deframe + decrypt incoming data ────────────────────────────────── */
 static int process_incoming(t3_client_stream *s) {
@@ -554,13 +526,36 @@ T3_API t3_result_t t3_client_pump(t3_client_stream *s) {
         /* Flush */
         ssl_flush_out(s);
 
-        /* For HTTP: wait for response headers */
+        /* For HTTP: consume response headers if present.
+           nginx may deliver headers in a separate TLS record that arrives
+           before or after the chunked body. If first bytes are not "HTTP",
+           body arrived first — skip header parsing. */
         if (s->mode == T3C_MODE_HTTP && !s->http_response_done) {
+            ssl_flush_out(s);
             ssl_read_in(s);
-            int rc = handle_http_response(s);
-            if (rc != 0) {
-                return rc < 0 ? T3_ERR_INTERNAL : T3_ERR_BUF_TOO_SMALL;
+            const uint8_t *ptr;
+            size_t avail = ring_read_ptr(&s->in_ring, &ptr);
+            if (avail == 0) {
+                return T3_ERR_BUF_TOO_SMALL;
             }
+            if (avail >= 4 && memcmp(ptr, "HTTP", 4) == 0) {
+                const uint8_t *end = NULL;
+                for (size_t i = 0; i + 3 < avail; i++) {
+                    if (ptr[i]=='\r' && ptr[i+1]=='\n' && ptr[i+2]=='\r' && ptr[i+3]=='\n') {
+                        end = ptr + i + 4;
+                        break;
+                    }
+                }
+                if (!end) {
+                    if (avail > 8192) {
+                        s->state = T3_CLIENT_STATE_ERROR;
+                        return T3_ERR_INTERNAL;
+                    }
+                    return T3_ERR_BUF_TOO_SMALL;
+                }
+                ring_consume(&s->in_ring, (size_t)(end - ptr));
+            }
+            s->http_response_done = 1;
         }
 
         s->state = T3_CLIENT_STATE_READY;
