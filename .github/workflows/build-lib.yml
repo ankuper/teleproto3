@@ -1,28 +1,73 @@
-# build-lib.yml — triggered on lib/** changes.
-# Builds libteleproto3.a (POSIX Make), runs unit + integration tests,
-# and on `lib-v*` tags publishes libteleproto3-vX.Y.Z.tar.gz as a
-# GitHub Release asset for consumer forks to pin.
-#
-# TODO(lib-v0.1.0): flesh out build + test + release-asset upload.
 name: build-lib
 
 on:
   push:
     branches: [main]
-    paths:
-      - 'lib/**'
-      - '.github/workflows/build-lib.yml'
-    tags:
-      - 'lib-v*'
+    paths: ['lib/**', '.github/workflows/build-lib.yml']
+    tags: ['lib-v*']
   pull_request:
-    paths:
-      - 'lib/**'
-      - '.github/workflows/build-lib.yml'
+    paths: ['lib/**', '.github/workflows/build-lib.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Placeholder
-        run: 'echo "TODO: make -C lib/build, run lib/tests/**"'
+
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev zlib1g-dev
+
+      - name: Build libteleproto3
+        run: |
+          cmake -S lib -B lib/build -DCMAKE_BUILD_TYPE=Release -DT3_BUILD_CLIENT=ON
+          cmake --build lib/build -j$(nproc)
+
+      - name: Run tests
+        run: cd lib/build && ctest --output-on-failure
+
+      - name: Package
+        run: |
+          ARCH=${{ matrix.arch }}
+          mkdir -p dist/include
+          cp lib/build/libteleproto3.a dist/
+          cp lib/include/t3.h lib/include/t3_client.h lib/include/t3_features.h dist/include/
+          tar czf libteleproto3-linux-${ARCH}.tar.gz -C dist .
+          echo "ASSET=libteleproto3-linux-${ARCH}.tar.gz" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-linux-${{ matrix.arch }}
+          path: ${{ env.ASSET }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/lib-v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - name: Upload to latest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq .tag_name)
+          for f in libteleproto3-linux-*/libteleproto3-linux-*.tar.gz; do
+            NAME=$(basename "$f")
+            # Delete existing asset with same name
+            ASSET_ID=$(gh api "repos/${{ github.repository }}/releases/tags/$TAG" --jq ".assets[] | select(.name==\"$NAME\") | .id" 2>/dev/null || true)
+            [ -n "$ASSET_ID" ] && gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$ASSET_ID" 2>/dev/null || true
+            gh release upload "$TAG" "$f" --repo "${{ github.repository }}"
+            echo "Uploaded $NAME to release $TAG"
+          done
