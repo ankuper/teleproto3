@@ -465,7 +465,13 @@ static int process_incoming(t3_client_stream *s) {
        [4-byte LE wire_length][payload (wire_length bytes)]
        wire_length includes 0-15 bytes of trailing padding. We can't strip
        padding precisely here (caller's MTProto parser uses its own length),
-       so emit the full wire_length payload — TDLib does the same. */
+       so emit the full wire_length payload — TDLib does the same.
+
+       The 4-byte wire_length prefix is PRESERVED into plain_in so that
+       t3_client_read() can return exactly ONE message per call. Without it,
+       multiple MTProto messages concatenate boundary-free and a stream caller
+       (tgnet) parses only the first, silently dropping the rest (e.g. it sees
+       resPQ but never server_DH_params → handshake stalls). */
     for (;;) {
         const uint8_t *rptr;
         size_t ravail = ring_read_ptr(&s->reasm_in, &rptr);
@@ -486,7 +492,7 @@ static int process_incoming(t3_client_stream *s) {
         }
         if (ravail < 4 + wire_length) break;  /* need more */
 
-        ring_append(&s->plain_in, rptr + 4, wire_length);
+        ring_append(&s->plain_in, rptr, 4 + wire_length);  /* keep length prefix */
         ring_consume(&s->reasm_in, 4 + wire_length);
     }
     return 0;
@@ -671,19 +677,35 @@ T3_API t3_result_t t3_client_read(t3_client_stream *s,
     if (!s || !out_buf || !out_len) return T3_ERR_INVALID_ARG;
     if (s->state != T3_CLIENT_STATE_READY) return T3_ERR_INVALID_ARG;
 
+    /* plain_in holds framed messages: [4-byte wire_length][payload]...
+       Return exactly ONE message's payload per call so a stream caller can
+       parse message-by-message without losing boundaries. */
     size_t avail = ring_used(&s->plain_in);
-    if (avail == 0) {
+    if (avail < 4) {
         *out_len = 0;
-        return T3_ERR_BUF_TOO_SMALL;  /* no data yet */
+        return T3_ERR_BUF_TOO_SMALL;  /* no complete frame yet */
     }
 
-    size_t to_read = avail < out_cap ? avail : out_cap;
     const uint8_t *ptr;
     ring_read_ptr(&s->plain_in, &ptr);
-    memcpy(out_buf, ptr, to_read);
-    ring_consume(&s->plain_in, to_read);
 
-    *out_len = to_read;
+    uint32_t msg_len;
+    memcpy(&msg_len, ptr, 4);
+    msg_len &= 0x7fffffff;
+
+    if (avail < 4 + (size_t)msg_len) {
+        *out_len = 0;
+        return T3_ERR_BUF_TOO_SMALL;  /* frame not fully reassembled yet */
+    }
+    if ((size_t)msg_len > out_cap) {
+        *out_len = 0;
+        return T3_ERR_BUF_TOO_SMALL;  /* caller buffer can't hold this message */
+    }
+
+    memcpy(out_buf, ptr + 4, msg_len);
+    ring_consume(&s->plain_in, 4 + (size_t)msg_len);
+
+    *out_len = msg_len;
     return T3_OK;
 }
 
