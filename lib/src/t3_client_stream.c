@@ -118,7 +118,8 @@ struct t3_client_stream {
     /* Buffers */
     ring_buf_t           in_ring;    /* raw bytes from TLS → deframe → decrypt */
     ring_buf_t           out_ring;   /* encrypt → frame → TLS write */
-    ring_buf_t           plain_in;   /* decrypted MTProto payloads for caller */
+    ring_buf_t           reasm_in;   /* decrypted stream, before intermediate deframing */
+    ring_buf_t           plain_in;   /* deframed MTProto payloads for caller */
 
     /* WS state */
     int                  ws_upgrade_sent;
@@ -230,6 +231,7 @@ T3_API t3_result_t t3_client_create(
 
     ring_init(&s->in_ring);
     ring_init(&s->out_ring);
+    ring_init(&s->reasm_in);
     ring_init(&s->plain_in);
 
     if (parse_endpoint(endpoint_url, &s->sni_host, &s->host, &s->path,
@@ -446,21 +448,46 @@ static int process_incoming(t3_client_stream *s) {
             }
         }
 
-        /* Decrypt */
+        /* Decrypt chunk payload into reassembly stream */
         uint8_t *decrypted = (uint8_t *)malloc(payload_len);
         if (!decrypted) return -1;
         if (t3c_aes_crypt(&s->decrypt_ctx, payload, decrypted, payload_len) != 0) {
             free(decrypted);
             return -1;
         }
-
-        /* Skip padding frames (first byte == 0xFE) */
-        if (payload_len > 0 && decrypted[0] != T3_PADDING_MARKER) {
-            ring_append(&s->plain_in, decrypted, payload_len);
-        }
+        ring_append(&s->reasm_in, decrypted, payload_len);
         free(decrypted);
 
         ring_consume(&s->in_ring, consumed);
+    }
+
+    /* Extract intermediate-format packets from reassembly stream:
+       [4-byte LE wire_length][payload (wire_length bytes)]
+       wire_length includes 0-15 bytes of trailing padding. We can't strip
+       padding precisely here (caller's MTProto parser uses its own length),
+       so emit the full wire_length payload — TDLib does the same. */
+    for (;;) {
+        const uint8_t *rptr;
+        size_t ravail = ring_read_ptr(&s->reasm_in, &rptr);
+        if (ravail < 4) break;
+
+        uint32_t wire_length;
+        memcpy(&wire_length, rptr, 4);
+        wire_length &= 0x7fffffff;  /* strip quick-ack bit */
+
+        if (wire_length < 4 || wire_length > (1u << 22)) {
+            /* Malformed — but first packet might be a padding-only frame.
+               Skip a padding frame if marker present. */
+            if (rptr[0] == T3_PADDING_MARKER) {
+                ring_consume(&s->reasm_in, 1);
+                continue;
+            }
+            return -1;
+        }
+        if (ravail < 4 + wire_length) break;  /* need more */
+
+        ring_append(&s->plain_in, rptr + 4, wire_length);
+        ring_consume(&s->reasm_in, 4 + wire_length);
     }
     return 0;
 }
@@ -577,32 +604,52 @@ T3_API t3_result_t t3_client_write(t3_client_stream *s,
     if (!s || !plaintext || len == 0) return T3_ERR_INVALID_ARG;
     if (s->state != T3_CLIENT_STATE_READY) return T3_ERR_INVALID_ARG;
 
-    /* Encrypt */
-    uint8_t *encrypted = (uint8_t *)malloc(len);
-    if (!encrypted) return T3_ERR_INTERNAL;
-    if (t3c_aes_crypt(&s->encrypt_ctx, plaintext, encrypted, len) != 0) {
-        free(encrypted);
-        return T3_ERR_INTERNAL;
+    /* === Padded intermediate format (matches TDLib Type3HttpStreamTransport::write) ===
+       Layout before encryption: [4-byte LE wire_length][payload][0-15 random padding]
+       wire_length = payload_len + padding_len (NOT including the 4-byte length field). */
+    uint8_t padding_len = 0;
+    {
+        uint8_t r;
+        if (RAND_bytes(&r, 1) == 1) padding_len = r & 0x0F;
+    }
+    size_t frame_len = 4 + len + padding_len;
+    uint8_t *framed = (uint8_t *)malloc(frame_len);
+    if (!framed) return T3_ERR_INTERNAL;
+
+    uint32_t wire_length = (uint32_t)(len + padding_len);
+    memcpy(framed, &wire_length, 4);
+    memcpy(framed + 4, plaintext, len);
+    if (padding_len > 0) {
+        RAND_bytes(framed + 4 + len, padding_len);
     }
 
-    /* Frame */
+    /* Encrypt the whole framed buffer */
+    uint8_t *encrypted = (uint8_t *)malloc(frame_len);
+    if (!encrypted) { free(framed); return T3_ERR_INTERNAL; }
+    if (t3c_aes_crypt(&s->encrypt_ctx, framed, encrypted, frame_len) != 0) {
+        free(framed); free(encrypted);
+        return T3_ERR_INTERNAL;
+    }
+    free(framed);
+
+    /* Frame for transport */
     if (s->mode == T3C_MODE_WS) {
-        size_t frame_cap = len + 14;  /* WS header max 14 bytes */
+        size_t frame_cap = frame_len + 14;
         uint8_t *frame = (uint8_t *)malloc(frame_cap);
         if (!frame) { free(encrypted); return T3_ERR_INTERNAL; }
-        size_t frame_len;
-        if (t3c_ws_frame_write(encrypted, len, frame, frame_cap, &frame_len) != 0) {
+        size_t flen;
+        if (t3c_ws_frame_write(encrypted, frame_len, frame, frame_cap, &flen) != 0) {
             free(frame); free(encrypted);
             return T3_ERR_INTERNAL;
         }
-        ring_append(&s->out_ring, frame, frame_len);
+        ring_append(&s->out_ring, frame, flen);
         free(frame);
     } else {
-        size_t chunk_cap = len + 32;
+        size_t chunk_cap = frame_len + 32;
         uint8_t *chunk = (uint8_t *)malloc(chunk_cap);
         if (!chunk) { free(encrypted); return T3_ERR_INTERNAL; }
         size_t chunk_len;
-        if (t3_http_chunk_write(chunk, chunk_cap, encrypted, len, &chunk_len) != T3_OK) {
+        if (t3_http_chunk_write(chunk, chunk_cap, encrypted, frame_len, &chunk_len) != T3_OK) {
             free(chunk); free(encrypted);
             return T3_ERR_INTERNAL;
         }
@@ -669,6 +716,7 @@ T3_API void t3_client_destroy(t3_client_stream *s) {
 
     ring_free(&s->in_ring);
     ring_free(&s->out_ring);
+    ring_free(&s->reasm_in);
     ring_free(&s->plain_in);
 
     free(s->host);

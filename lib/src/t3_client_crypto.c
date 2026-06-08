@@ -54,8 +54,14 @@ int t3c_obfs2_generate_init(const uint8_t secret[16], int16_t dc_id,
         *(uint32_t *)(header + 4) == 0x00000000
     );
 
-    /* Set transport tag: intermediate (0xeeeeeeee) at offset 56 */
-    *(uint32_t *)(header + 56) = 0xeeeeeeee;
+    /* Type3 Session Header at bytes [0:3] (matches TDLib Type3HttpStreamTransport) */
+    header[0] = 0x01;  /* command_type = MTPROTO_PASSTHROUGH */
+    header[1] = 0x01;  /* version = 1 */
+    /* flags: T3_FLAG_PADDING (0x0001) — padded intermediate mode */
+    header[2] = 0x01;
+    header[3] = 0x00;
+    /* Set transport tag: padded intermediate (0xdddddddd) at offset 56 */
+    *(uint32_t *)(header + 56) = 0xdddddddd;
     /* Set target DC at offset 60 */
     *(int16_t *)(header + 60) = dc_id;
 
