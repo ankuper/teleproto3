@@ -29,8 +29,15 @@
 #include <openssl/err.h>
 #include <openssl/rand.h>
 
-/* ── Internal ring buffer ───────────────────────────────────────────── */
-#define RING_CAP (256 * 1024)
+/* ── Internal ring buffer ───────────────────────────────────────────────
+   Sized to hold the largest single intermediate frame (wire_length is capped
+   at 1<<22 = 4 MiB in process_incoming) plus headroom for adjacent messages.
+   256 KiB was too small: a sync burst of large messages (containers, difference
+   updates) overflowed plain_in, ring_append() silently dropped the overflow
+   while reasm_in was still consumed, so whole messages vanished and the client
+   processed an inconsistent stream — manifesting downstream as a heap-corruption
+   crash in Datacenter::createRequestsData. */
+#define RING_CAP (8 * 1024 * 1024)
 
 typedef struct {
     uint8_t *data;
@@ -455,7 +462,13 @@ static int process_incoming(t3_client_stream *s) {
             free(decrypted);
             return -1;
         }
-        ring_append(&s->reasm_in, decrypted, payload_len);
+        /* Apply backpressure: if reasm_in can't take this chunk, leave the raw
+           bytes in in_ring and retry next pump once downstream drains. Consuming
+           in_ring after a failed append would silently drop the chunk. */
+        if (ring_append(&s->reasm_in, decrypted, payload_len) != 0) {
+            free(decrypted);
+            break;
+        }
         free(decrypted);
 
         ring_consume(&s->in_ring, consumed);
@@ -492,7 +505,10 @@ static int process_incoming(t3_client_stream *s) {
         }
         if (ravail < 4 + wire_length) break;  /* need more */
 
-        ring_append(&s->plain_in, rptr, 4 + wire_length);  /* keep length prefix */
+        /* Backpressure: if plain_in is full, leave the frame in reasm_in and
+           retry once the caller drains it. Consuming reasm_in after a failed
+           append would silently drop a whole message and desync the stream. */
+        if (ring_append(&s->plain_in, rptr, 4 + wire_length) != 0) break;  /* keep length prefix */
         ring_consume(&s->reasm_in, 4 + wire_length);
     }
     return 0;
