@@ -16,14 +16,53 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <poll.h>
+
+/* ── Platform socket layer ──────────────────────────────────────────────
+   t3_client_* owns its own non-blocking TCP socket. POSIX (Linux/macOS/
+   Android) and Windows (winsock2) expose this differently; unify behind a
+   small compat shim so the rest of the file stays platform-neutral. */
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  ifndef SHUT_RDWR
+#    define SHUT_RDWR SD_BOTH
+#  endif
+#  define T3_CLOSESOCKET(fd)   closesocket((SOCKET)(fd))
+#  define T3_SOCK_LASTERR()    WSAGetLastError()
+#  define T3_SOCK_INPROGRESS   WSAEWOULDBLOCK
+#  define t3_poll              WSAPoll
+static int t3_sock_set_nonblocking(int fd) {
+    u_long mode = 1;
+    return ioctlsocket((SOCKET)fd, FIONBIO, &mode);
+}
+static int t3_sock_startup(void) {
+    static int done = 0;
+    if (!done) {
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return -1;
+        done = 1;
+    }
+    return 0;
+}
+#else
+#  include <fcntl.h>
+#  include <unistd.h>
+#  include <netdb.h>
+#  include <sys/socket.h>
+#  include <sys/types.h>
+#  include <netinet/in.h>
+#  include <netinet/tcp.h>
+#  include <poll.h>
+#  define T3_CLOSESOCKET(fd)   close(fd)
+#  define T3_SOCK_LASTERR()    errno
+#  define T3_SOCK_INPROGRESS   EINPROGRESS
+#  define t3_poll              poll
+static int t3_sock_set_nonblocking(int fd) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+}
+static int t3_sock_startup(void) { return 0; }
+#endif
 
 #include <openssl/ssl.h>
 #include <openssl/err.h>
@@ -189,30 +228,33 @@ static int nb_connect(const char *host, int port) {
     char port_str[16];
     snprintf(port_str, sizeof(port_str), "%d", port);
 
+    if (t3_sock_startup() != 0) {
+        return -1;
+    }
+
     struct addrinfo *res = NULL;
     if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
         return -1;
     }
 
-    int fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    int fd = (int)socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) {
         freeaddrinfo(res);
         return -1;
     }
 
     /* Non-blocking */
-    int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    t3_sock_set_nonblocking(fd);
 
     /* TCP_NODELAY */
     int one = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof(one));
 
-    int rc = connect(fd, res->ai_addr, res->ai_addrlen);
+    int rc = connect(fd, res->ai_addr, (int)res->ai_addrlen);
     freeaddrinfo(res);
 
-    if (rc < 0 && errno != EINPROGRESS) {
-        close(fd);
+    if (rc < 0 && T3_SOCK_LASTERR() != T3_SOCK_INPROGRESS) {
+        T3_CLOSESOCKET(fd);
         return -1;
     }
 
@@ -523,11 +565,11 @@ T3_API t3_result_t t3_client_pump(t3_client_stream *s) {
     /* ── CONNECTING: check if TCP connect completed ─────────────── */
     if (s->state == T3_CLIENT_STATE_CONNECTING) {
         struct pollfd pfd = { .fd = s->fd, .events = POLLOUT };
-        int rc = poll(&pfd, 1, 0);
+        int rc = t3_poll(&pfd, 1, 0);
         if (rc <= 0) return T3_ERR_BUF_TOO_SMALL;  /* not yet */
         int err = 0;
         socklen_t len = sizeof(err);
-        getsockopt(s->fd, SOL_SOCKET, SO_ERROR, &err, &len);
+        getsockopt(s->fd, SOL_SOCKET, SO_ERROR, (char *)&err, &len);
         if (err != 0) {
             snprintf(s->last_error, sizeof(s->last_error), "TCP connect failed: %s", strerror(err));
             s->state = T3_CLIENT_STATE_ERROR;
@@ -750,7 +792,7 @@ T3_API void t3_client_destroy(t3_client_stream *s) {
         SSL_free(s->ssl);
     }
     if (s->ssl_ctx) SSL_CTX_free(s->ssl_ctx);
-    if (s->fd >= 0) close(s->fd);
+    if (s->fd >= 0) T3_CLOSESOCKET(s->fd);
 
     ring_free(&s->in_ring);
     ring_free(&s->out_ring);
