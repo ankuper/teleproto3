@@ -40,9 +40,14 @@ jobs:
       - name: Package
         run: |
           ARCH=${{ matrix.arch }}
-          mkdir -p dist/include
-          cp lib/build/libteleproto3.a dist/
-          cp lib/include/t3.h lib/include/t3_client.h lib/include/t3_features.h dist/include/
+          # Mirror the source-tree layout consumers expect: lib/include, the
+          # static lib under lib/, and the full spec/ tree (codegen inputs:
+          # ux-strings.yaml, ux-tokens/, assets/). A consumer extracts to a
+          # root and points LIBTELEPROTO3_ROOT at it — no source clone needed.
+          mkdir -p dist/lib/include
+          cp lib/build/libteleproto3.a dist/lib/
+          cp lib/include/t3.h lib/include/t3_client.h lib/include/t3_features.h dist/lib/include/
+          cp -R spec dist/spec
           tar czf libteleproto3-linux-${ARCH}.tar.gz -C dist .
           echo "ASSET=libteleproto3-linux-${ARCH}.tar.gz" >> $GITHUB_ENV
 
@@ -83,9 +88,10 @@ jobs:
       - name: Package
         run: |
           ARCH=${{ matrix.arch }}
-          mkdir -p dist/include
-          cp lib/build/libteleproto3.a dist/
-          cp lib/include/t3.h lib/include/t3_client.h lib/include/t3_features.h dist/include/
+          mkdir -p dist/lib/include
+          cp lib/build/libteleproto3.a dist/lib/
+          cp lib/include/t3.h lib/include/t3_client.h lib/include/t3_features.h dist/lib/include/
+          cp -R spec dist/spec
           tar czf libteleproto3-macos-${ARCH}.tar.gz -C dist .
           echo "ASSET=libteleproto3-macos-${ARCH}.tar.gz" >> $GITHUB_ENV
 
@@ -142,9 +148,10 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist\include | Out-Null
-          Copy-Item lib\build\teleproto3.lib dist\
-          Copy-Item lib\include\t3.h,lib\include\t3_client.h,lib\include\t3_features.h dist\include\
+          New-Item -ItemType Directory -Force -Path dist\lib\include | Out-Null
+          Copy-Item lib\build\teleproto3.lib dist\lib\
+          Copy-Item lib\include\t3.h,lib\include\t3_client.h,lib\include\t3_features.h dist\lib\include\
+          Copy-Item -Recurse spec dist\spec
           Compress-Archive -Path dist\* -DestinationPath libteleproto3-windows-x86_64.zip -Force
 
       - name: Upload artifact
