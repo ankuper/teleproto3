@@ -8,57 +8,112 @@ declares the `spec-vX.Y.Z` range it implements — see `VERSION`.
 
 ### Added
 - `t3_shim_get_credentials()` — retrieve the auto-generated SOCKS5
-  USERNAME/PASSWORD that the shim now enforces on its loopback listener
+  USERNAME/PASSWORD that the shim enforces on its loopback listener
   (Story 9-1 D6). New constants `T3_SHIM_CRED_LEN` (32) and
   `T3_SHIM_CRED_BUFLEN` (33) declared in `t3_shim_socks5.h`.
 
-### Changed
-- The shim's loopback SOCKS5 listener REQUIRES RFC 1929 USERNAME/PASSWORD
-  authentication (method 0x02). NO-AUTH (method 0x00) is no longer accepted.
-  Credentials are auto-generated per shim spawn; callers retrieve them via
-  `t3_shim_get_credentials()`. This is defense against other local processes
-  hijacking the loopback listener and tunneling traffic through Type3.
+## [lib-v0.6.0] — 2026-06-17
 
-### Stability note
-Additive C API only — `t3_shim_open` signature unchanged. ABI patch bump
-will be applied at the next release tag.
-
-## [lib-v0.4.0] — 2026-05-27
+### Fixed
+- Windows/MSVC: `winsock2.h` inclusion order fixed for socket type definitions
+  (`SOCKET`/`INVALID_SOCKET` undefined errors).
+- Windows/MSVC: portable `strndup`/`strdup` shims; silenced C4996 deprecation
+  warnings on POSIX CRT functions (`strerror`, `strdup`).
 
 ### Added
-- **Client-side transport API** (`t3_client.h`): `t3_client_connect`,
-  `t3_client_wrap`, `t3_client_unwrap`, `t3_client_close` — abstraction for
-  establishing Type3 connections from client code. Supports both WebSocket
-  and HTTP stream transport modes. Used by the tdlib Type3 integration.
-  (Epic 13, Stories 13-1 through 13-4.)
-- **HTTP stream framing** (`t3_http_stream.c`): HTTP chunked transfer
-  encoding for POST-based transport mode. Implements `Transfer-Encoding:
-  chunked` framing for both request and response directions. ТСПУ-resistant
-  — traffic looks like a normal HTTPS POST to a REST API.
-  (Epic 12, Story 12-2.)
-- **Client WebSocket framing** (`t3_client_ws.c`): WebSocket frame write
-  (masked per RFC 6455 §5.3) and read for client-side use.
-- **Client crypto** (`t3_client_crypto.c`): obfs2 KDF + AES-256-CTR key
-  derivation ported from server to client. Shared by both transport modes.
-- `extern "C"` guards on internal headers (`t3_client_crypto.h`,
-  `t3_client_ws.h`) for C++ consumers (tdlib).
-- Padding/transport mode enums in `t3.h` (`T3_TRANSPORT_WEBSOCKET`,
-  `T3_TRANSPORT_HTTP_STREAM`).
+- CI: prebuilt `libteleproto3.a` for Windows and macOS shipped in GitHub
+  releases alongside headers and Linux archive.
+- CI: release assets bundled with headers + lib + spec in source-tree layout
+  for drop-in consumer integration.
+
+### Stability note
+ABI additive — no existing function signature or enumerant changed.
+`T3_ABI_VERSION_MINOR` bumped `5 → 6`.
+
+## [lib-v0.5.0] — 2026-06-09
+
+### Fixed
+- Ring buffers enlarged to 8 MiB; reassembly backpressure added. Previous
+  256 KiB cap caused data loss on sync bursts with large MTProto containers.
+- `t3_client_read` now returns exactly one complete MTProto message per call,
+  matching the one-write-per-message invariant on the send path.
+- `t3_client_*` data path reworked to match the server's framing expectations
+  (Epic 10/12 regression introduced during tdlib integration).
+- HTTP response headers are now correctly consumed when they arrive after
+  the start of a chunked body (edge case in HTTP/1.1 pipelining).
+- Android (API < 28): CSPRNG falls back to `/dev/urandom` instead of
+  `getrandom()` syscall; fixes crash on older devices.
+- Windows/MSVC: portable `strndup`/`strdup` shims; `winsock2.h` inclusion
+  order fixed for socket type definitions.
+
+### Added
+- CI: Android NDK cross-compilation script and GitHub Actions workflow.
+- CI: `build-lib` step produces prebuilt `libteleproto3.a` for Linux and
+  uploads it to the GitHub release alongside headers.
+- CI: `x86` ABI added to default Android build matrix (emulator support).
+
+## [lib-v0.4.0] — 2026-05-30
+
+### Changed
+- Client-side transport build is now optional via CMake flag
+  `T3_BUILD_CLIENT` (default `OFF`). When `OFF`, `t3_client_stream.c`
+  is excluded from the archive — the static library has no OpenSSL/TLS
+  symbols, which prevents the `nm-audit` symbol-leak failure on
+  tdesktop's macOS/Linux builds and MSVC linker errors on Windows.
+  Enable with `-DT3_BUILD_CLIENT=ON` when building a full client SDK.
+- SOCKS5 shim loopback listener now **requires** RFC 1929 USERNAME/PASSWORD
+  authentication (method `0x02`). NO-AUTH (`0x00`) is no longer accepted.
+  Credentials are auto-generated per shim spawn; retrieve with
+  `t3_shim_get_credentials()` (see `[Unreleased]`). Defense against local
+  processes hijacking the loopback listener and tunneling via Type3.
+
+### Stability note
+`t3_shim_open` signature unchanged — additive change only.
+
+## [lib-v0.3.0] — 2026-05-26
+
+### Added
+- **Client-side transport API** (`t3_client.h`): opaque handle
+  `t3_client_stream` with state machine `CONNECTING → TLS → HANDSHAKE → READY`.
+  Functions: `t3_client_create`, `t3_client_pump`, `t3_client_get_fd`,
+  `t3_client_get_state`, `t3_client_write`, `t3_client_read`,
+  `t3_client_destroy`, `t3_client_last_error`.
+  Used by tdlib, tdesktop, Telegram-Android, Telegram-iOS. (Epics 10, 12;
+  Story 12-5.)
+- `t3_client_crypto.c`: obfs2 KDF + AES-256-CTR key derivation for client-side
+  use. Shared by both WebSocket and HTTP stream transport paths.
+- `t3_client_ws.c`: WebSocket frame write (masked per RFC 6455 §5.3) and read
+  for client-side use (legacy transport path).
+- `extern "C"` guards on `t3_client_crypto.h` and `t3_client_ws.h` for C++
+  consumers (tdlib, tdesktop).
 
 ### Stability note
 New public header `t3_client.h` — ABI additive. Existing `t3.h` surface
-unchanged. `T3_ABI_VERSION_MINOR` bumped `1 → 4`.
+unchanged. `T3_ABI_VERSION_MINOR` bumped `2 → 3`.
 
-### Changed
-- The shim's loopback SOCKS5 listener REQUIRES RFC 1929 USERNAME/PASSWORD
-  authentication (method 0x02). NO-AUTH (method 0x00) is no longer accepted.
-  Credentials are auto-generated per shim spawn; callers retrieve them via
-  `t3_shim_get_credentials()`. This is defense against other local processes
-  hijacking the loopback listener and tunneling traffic through Type3.
+## [lib-v0.2.0] — 2026-05-26
+
+### Added
+- **HTTP chunked stream framing** (`t3_http_stream.c`): HTTP/1.1
+  `POST` + `Transfer-Encoding: chunked` for both request and response
+  directions. Traffic is indistinguishable from a normal HTTPS REST call —
+  resistant to WebSocket-specific DPI fingerprinting (ТСПУ). (Epic 12,
+  Story 12-4.)
+- `T3_TRANSPORT_WEBSOCKET` / `T3_TRANSPORT_HTTP_STREAM` transport mode enum
+  added to `t3.h`. HTTP stream endpoint URLs use the `https://` scheme;
+  WebSocket uses `wss://`. Secrets select the mode via `?t=1` query parameter
+  (A-012, `spec/secret-format.md §2.4`).
+- `T3_FLAG_PADDING` flag in the session header (bit 0): unilateral capability
+  advertisement — client signals support for receiving server-injected padding
+  frames. Anti-statistical-fingerprinting defence. (Epic 11, Story 11-1,
+  spec amendment W-004.)
+- Padding/splitting API (`t3_padding.c`): padding frame injection on the send
+  path and receive-side discard. Padding frames are binary WebSocket / HTTP
+  chunks with first decrypted byte `0xFE`; AES-CTR counter advances normally
+  (Invariant 2).
 
 ### Stability note
-Additive C API only — `t3_shim_open` signature unchanged. ABI patch bump
-will be applied at the next release tag.
+`T3_ABI_VERSION_MINOR` bumped `1 → 2`.
 
 ## [lib-v0.1.3] — 2026-05-12
 

@@ -1,13 +1,13 @@
 # teleproto3
 
-**Type3** (`mtProxy3`) is a censorship-resistant transport for [Telegram Messenger](https://telegram.org): it tunnels MTProto over HTTPS — either via WebSocket upgrade or HTTP POST with chunked transfer encoding — to bypass DPI-based blocking.
+**Type3** (`mtProxy3`) is a censorship-resistant transport for [Telegram Messenger](https://telegram.org): it tunnels MTProto over HTTPS via HTTP POST with chunked transfer encoding, to bypass DPI-based blocking (ТСПУ-resistant). WebSocket upgrade mode is supported for legacy clients but deprecated.
 
 This repository contains:
 
 | Directory | Contents |
 |-----------|----------|
 | `spec/` | Normative protocol specification |
-| `lib/` | Reference C implementation (`libteleproto3 v0.4.0`) |
+| `lib/` | Reference C implementation (`libteleproto3 v0.6.0`) |
 | `server/` | Server — fork of the official Telegram MTProxy with Type3 transport added |
 | `conformance/` | Language-agnostic test harness and protocol vectors |
 
@@ -17,19 +17,9 @@ This repository contains:
 
 ## How it works
 
-A Type3 connection supports two transport modes:
+A Type3 connection uses HTTP stream mode as the primary transport:
 
-**WebSocket mode** (default):
-```
-Client
-  └── TLS 1.2/1.3
-        └── HTTP/1.1 WebSocket upgrade (GET /<path>, Host: <host>)
-              └── Session Header (4 bytes, little-endian)
-                    └── obfuscated-2 MTProto (AES-256-CTR)
-                          └── Telegram DC
-```
-
-**HTTP stream mode** (ТСПУ-resistant):
+**HTTP stream mode** (recommended, ТСПУ-resistant):
 ```
 Client
   └── TLS 1.2/1.3
@@ -39,9 +29,19 @@ Client
                           └── Telegram DC
 ```
 
-TLS terminates on an nginx (or equivalent) reverse proxy. The proxy forwards the connection to the Type3 server on a local port. The server auto-detects the transport mode by inspecting the HTTP request line (`GET` → WebSocket, `POST` → HTTP stream). The obfuscation stream sits **inside** the transport frames — transport headers are plaintext to nginx; only the payload is encrypted.
+**WebSocket mode** (legacy, deprecated):
+```
+Client
+  └── TLS 1.2/1.3
+        └── HTTP/1.1 WebSocket upgrade (GET /<path>, Host: <host>)
+              └── Session Header (4 bytes, little-endian)
+                    └── obfuscated-2 MTProto (AES-256-CTR)
+                          └── Telegram DC
+```
 
-HTTP stream mode looks like a normal HTTPS POST to a REST API, making it resistant to WebSocket-specific DPI fingerprinting. See [`spec/wire-format.md` §1.3–§1.4](spec/wire-format.md) for the full specification and nginx configuration requirements.
+TLS terminates on an nginx (or equivalent) reverse proxy. The proxy forwards the connection to the Type3 server on a local port. The server auto-detects the transport mode by inspecting the HTTP request line (`POST` → HTTP stream, `GET` → WebSocket). The obfuscation stream sits **inside** the transport frames — transport headers are plaintext to nginx; only the payload is encrypted.
+
+HTTP stream mode looks like a normal HTTPS POST to a REST API, making it resistant to WebSocket-specific DPI fingerprinting. New clients MUST use HTTP stream. See [`spec/wire-format.md` §1.3–§1.4](spec/wire-format.md) for the full specification and nginx configuration requirements.
 
 ---
 
@@ -59,7 +59,7 @@ offset  length  field
 
 Minimum total length: **18 bytes**. Domain field maximum: **512 bytes** (host + `/` + path combined).
 
-The `host` and `path` sub-fields are split at the first `/` in the domain field. Both are pure ASCII; non-ASCII is rejected in `lib-v0.1.0`. The structured `(host, path)` pair — not the unsplit domain string — is used to construct the WebSocket `GET` target.
+The `host` and `path` sub-fields are split at the first `/` in the domain field. Both are pure ASCII; non-ASCII is rejected in `lib-v0.1.0`. The structured `(host, path)` pair — not the unsplit domain string — is used to construct the HTTP POST path and `Host:` header (or WebSocket `GET` target for legacy clients).
 
 ---
 
@@ -149,22 +149,37 @@ const char *t3_abi_version_string(void);
 
 ### Client-side transport API (`t3_client.h`)
 
-Added in `v0.3.0`. Provides a client-side abstraction for establishing Type3 connections:
+Added in `v0.3.0`. Provides a complete client transport abstraction:
+DNS resolve → TCP connect → TLS handshake → obfs2 init → AES-CTR encrypt/decrypt → HTTP-chunked framing.
+
+All clients (tdlib, tdesktop, Telegram-Android, Telegram-iOS) use this API:
 
 ```c
 #include "t3_client.h"
 
-// Connect to a Type3 server via TLS + WebSocket or HTTP stream
-t3_client_conn_t *conn = NULL;
-t3_result_t rc = t3_client_connect(secret, T3_TRANSPORT_WEBSOCKET, &conn);
+/* Create connection — endpoint_url is the HTTPS stream endpoint */
+t3_client_stream *s = NULL;
+t3_result_t rc = t3_client_create(
+    "https://example.invalid:443/ws/abcdef",  /* HTTP stream endpoint */
+    key_16bytes,   /* 16-byte proxy key from t3_secret_parse() */
+    dc_id,         /* Telegram DC id (signed; negative = media) */
+    &s
+);
+if (rc != T3_OK) { fprintf(stderr, "%s\n", t3_strerror(rc)); return 1; }
 
-// Wrap outgoing MTProto packet for transport
-t3_client_wrap(conn, plaintext, len, &wire_out, &wire_len);
+/* Register t3_client_get_fd(s) with poll/epoll; call pump() on events */
+while (t3_client_get_state(s) != T3_CLIENT_STATE_READY)
+    t3_client_pump(s);   /* drives TLS + obfs2 handshake */
 
-// Unwrap incoming transport frame to MTProto packet
-t3_client_unwrap(conn, wire_in, wire_len, &plain_out, &plain_len);
+/* Write MTProto plaintext → encrypted + chunked over TLS */
+t3_client_write(s, mtproto_payload, payload_len);
 
-t3_client_close(conn);
+/* Read decrypted MTProto payload from incoming data */
+uint8_t buf[65536];
+size_t n = 0;
+t3_client_read(s, buf, sizeof(buf), &n);   /* one message per call */
+
+t3_client_destroy(s);   /* close fd, free resources; NULL-safe */
 ```
 
 See `lib/src/t3_client_stream.c`, `t3_client_ws.c`, `t3_http_stream.c` for the implementation.
@@ -174,7 +189,11 @@ See `lib/src/t3_client_stream.c`, `t3_client_ws.c`, `t3_http_stream.c` for the i
 | Version | Rule |
 |---------|------|
 | `lib-v0.1.x` | ABI frozen. New enumerants in `t3_result_t` are permitted; consumers **MUST** treat unknown values as `T3_ERR_INTERNAL`. |
-| `lib-v0.2.0+` | New functions (`t3_client_*`), new fields in `t3_callbacks_t`, HTTP stream framing. |
+| `lib-v0.2.0` | Padding/splitting API, HTTP stream framing, transport mode enums (`T3_TRANSPORT_*`). |
+| `lib-v0.3.0` | Client-side transport API (`t3_client.h`): `t3_client_create/pump/write/read/destroy`. |
+| `lib-v0.4.0` | Optional client build (`T3_BUILD_CLIENT`), SOCKS5 auth hardening. |
+| `lib-v0.5.0` | Client data-path correctness fixes, 8 MiB ring buffers, Android/Windows compat. |
+| `lib-v0.6.0` | Windows/MSVC portability, prebuilt win+mac libs in GitHub releases. |
 
 ### Build
 

@@ -12,13 +12,18 @@
  */
 
 /*
- * Stability: Frozen for lib-v0.1.x (ABI levels 0.1.0–0.1.3). lib-v0.2.0
- * adds padding/splitting API (Epic 11). Adding a new function or a new
- * field to t3_callbacks_t (beyond the forward-compat struct_size sentinel)
- * is permitted in minor bumps. Adding a new enumerant to t3_result_t is
- * permitted in any patch and consumers MUST treat unknown values as
- * T3_ERR_INTERNAL. Little-endian byte order is normative for every
- * multi-byte field on the wire (cross-ref spec/wire-format.md §3).
+ * Stability: Frozen for lib-v0.1.x (ABI levels 0.1.0–0.1.3).
+ * lib-v0.2.0: padding/splitting API + HTTP stream transport (Epics 11–12).
+ * lib-v0.3.0: client-side transport API (t3_client.h, Epics 10/12).
+ * lib-v0.4.0: optional client build (T3_BUILD_CLIENT), SOCKS5 auth hardening.
+ * lib-v0.5.0: client data-path fixes, Android/Windows compat, 8 MiB ring buffers.
+ * lib-v0.6.0: Windows/MSVC portability fixes, prebuilt libs (win + mac) in releases.
+ * Adding a new function or a new field to t3_callbacks_t (beyond the
+ * forward-compat struct_size sentinel) is permitted in minor bumps.
+ * Adding a new enumerant to t3_result_t is permitted in any patch and
+ * consumers MUST treat unknown values as T3_ERR_INTERNAL.
+ * Little-endian byte order is normative for every multi-byte field on
+ * the wire (cross-ref spec/wire-format.md §3).
  */
 
 #ifndef TELEPROTO3_T3_H
@@ -57,11 +62,11 @@ extern "C" {
 #endif
 
 #define T3_LIB_VERSION_MAJOR 0
-#define T3_LIB_VERSION_MINOR 2
+#define T3_LIB_VERSION_MINOR 6
 #define T3_LIB_VERSION_PATCH 0
 
 #define T3_ABI_VERSION_MAJOR 0
-#define T3_ABI_VERSION_MINOR 2
+#define T3_ABI_VERSION_MINOR 6
 #define T3_ABI_VERSION_PATCH 0
 
 /* MSVC's C++ frontend doesn't accept the C11 _Static_assert keyword. Pick the

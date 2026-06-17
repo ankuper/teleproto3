@@ -1,6 +1,6 @@
 ---
 spec_version: 0.1.0-draft
-last_updated: 2026-05-14
+last_updated: 2026-06-17
 status: draft
 ---
 
@@ -10,8 +10,9 @@ status: draft
 
 # Type3 Specification
 
-Type3 (also: `mtProxy3`) is a transport for tunneling MTProto over
-WebSocket-upgraded HTTPS. This directory contains the normative
+Type3 (also: `mtProxy3`) is a transport for tunneling MTProto over HTTPS —
+primarily via HTTP POST with chunked transfer encoding (ТСПУ-resistant);
+WebSocket upgrade is the legacy mode. This directory contains the normative
 specification.
 
 ## Reading order
