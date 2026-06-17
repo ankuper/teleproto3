@@ -30,7 +30,7 @@ set -euo pipefail
 # ── Constants ──────────────────────────────────────────────────────────────────
 OPENSSL_VERSION="3.3.2"
 OPENSSL_URL="https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz"
-OPENSSL_SHA256="2e8a40b01979afe8be0bbfb3de5dc1c6709fedb46d6c89f9e3583a19c9e1c721"
+OPENSSL_SHA256="2e8a40b01979afe8be0bbfb3de5dc1c6709fedb46d6c89c10da114ab5fc3d281"
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
 OUT=""
