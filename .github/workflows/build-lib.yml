@@ -57,14 +57,17 @@ jobs:
           name: libteleproto3-linux-${{ matrix.arch }}
           path: ${{ env.ASSET }}
 
-  # ── macOS: static .a for x86_64 (Intel) + arm64 (Apple Silicon) ──────────────
-  # tdesktop-mac consumes this; native-arch runner per matrix entry.
+  # ── macOS: static .a for arm64 (Apple Silicon) ──────────────────────────────
+  # tdesktop-mac builds on Apple Silicon runners (macos-latest) and consumes
+  # macos-arm64. Intel (x86_64) is intentionally omitted: macos-13 Intel
+  # runners are being retired by GitHub and queue for hours, and no consumer
+  # builds tdesktop-mac on x86_64 today. When an Intel-mac consumer appears,
+  # cross-compile it on the arm64 runner via -DCMAKE_OSX_ARCHITECTURES=x86_64
+  # rather than reintroducing the scarce Intel runner.
   build-macos:
     strategy:
       matrix:
         include:
-          - os: macos-13      # Intel runner
-            arch: x86_64
           - os: macos-14      # Apple Silicon runner
             arch: arm64
     runs-on: ${{ matrix.os }}
