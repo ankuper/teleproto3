@@ -1,0 +1,63 @@
+name: Build Android prebuilt
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          add-to-path: true
+
+      - name: Install build deps
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      - name: Build Android artifacts
+        run: |
+          chmod +x ci/build-android-release.sh
+          ci/build-android-release.sh --out /tmp/t3-android-out
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+
+      - name: Pack artifacts
+        run: |
+          cd /tmp/t3-android-out
+          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
+            mkdir -p "stage-${ABI}/lib"
+            cp "${ABI}/libteleproto3.a" "stage-${ABI}/lib/"
+            cp -r "${ABI}/include" "stage-${ABI}/lib/include"
+            tar czf "libteleproto3-android-${ABI}.tar.gz" -C "stage-${ABI}" .
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-android
+          path: /tmp/t3-android-out/libteleproto3-android-*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${GITHUB_REF##*/}
+          # Create release if it doesn't exist yet (no-op if already exists)
+          gh release create "$TAG" --title "$TAG" --prerelease 2>/dev/null || true
+          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do
+            gh release upload "$TAG" "/tmp/t3-android-out/libteleproto3-android-${ABI}.tar.gz" \
+              --repo "${{ github.repository }}"
+          done

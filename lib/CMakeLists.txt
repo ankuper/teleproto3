@@ -78,6 +78,8 @@ if(T3_CSPRNG_BACKEND STREQUAL "AUTO")
         set(T3_CSPRNG_BACKEND_RESOLVED "linux")
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         set(T3_CSPRNG_BACKEND_RESOLVED "macos")
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        set(T3_CSPRNG_BACKEND_RESOLVED "macos")
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
         set(T3_CSPRNG_BACKEND_RESOLVED "windows")
     else()
@@ -198,7 +200,7 @@ endif()
 # Without this flag the linker will fail with:
 #   Undefined symbols for architecture arm64: "_SecRandomCopyBytes"
 # The flag is gated on APPLE so Linux and Windows builds are unaffected.
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND T3_CSPRNG_BACKEND_RESOLVED STREQUAL "macos")
+if((CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS") AND T3_CSPRNG_BACKEND_RESOLVED STREQUAL "macos")
     target_link_libraries(teleproto3 PUBLIC "-framework Security")
 endif()
 

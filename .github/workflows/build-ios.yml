@@ -1,0 +1,62 @@
+name: Build iOS prebuilt
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build iOS artifacts
+        run: |
+          chmod +x ci/build-ios.sh
+          ci/build-ios.sh --out /tmp/t3-ios-out
+
+      - name: Pack artifacts
+        run: |
+          cd /tmp/t3-ios-out
+          # device
+          mkdir -p stage-device/lib
+          cp device-arm64/libteleproto3.a stage-device/lib/
+          cp -r device-arm64/include stage-device/lib/include
+          tar czf libteleproto3-ios-arm64.tar.gz -C stage-device .
+          # simulator
+          mkdir -p stage-sim/lib
+          cp simulator/libteleproto3.a stage-sim/lib/
+          cp -r simulator/include stage-sim/lib/include
+          tar czf libteleproto3-ios-simulator.tar.gz -C stage-sim .
+
+      - name: Upload artifact (device)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-ios-arm64
+          path: /tmp/t3-ios-out/libteleproto3-ios-arm64.tar.gz
+          if-no-files-found: error
+
+      - name: Upload artifact (simulator)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-ios-simulator
+          path: /tmp/t3-ios-out/libteleproto3-ios-simulator.tar.gz
+          if-no-files-found: error
+
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${GITHUB_REF##*/}
+          # Create release if it doesn't exist yet (no-op if already exists)
+          gh release create "$TAG" --title "$TAG" --prerelease 2>/dev/null || true
+          gh release upload "$TAG" /tmp/t3-ios-out/libteleproto3-ios-arm64.tar.gz \
+            --repo "${{ github.repository }}"
+          gh release upload "$TAG" /tmp/t3-ios-out/libteleproto3-ios-simulator.tar.gz \
+            --repo "${{ github.repository }}"
