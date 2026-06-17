@@ -124,8 +124,7 @@ build_openssl_android() {
 
     local TMPDIR_SSL
     TMPDIR_SSL="$(mktemp -d "/tmp/openssl-android-${ABI}-XXXXXX")"
-    # Clean up on exit, but only from within this subshell via trap RETURN
-    # (we use a subshell below anyway)
+    trap 'rm -rf "$TMPDIR_SSL"' RETURN
 
     local TARBALL="$TMPDIR_SSL/openssl.tar.gz"
 
@@ -169,7 +168,6 @@ build_openssl_android() {
         make install_dev
     )
 
-    rm -rf "$TMPDIR_SSL"
     printf 'OpenSSL for %s: done → %s\n' "$ABI" "$SSL_OUT"
 }
 
@@ -243,6 +241,7 @@ for ABI in "${ABI_LIST[@]}"; do
     mkdir -p "$ABI_OUT"
     cp "$ARTIFACT" "$ABI_OUT/libteleproto3.a"
     cp -r "$INCLUDE_SRC" "$ABI_OUT/include"
+    rm -rf "$ABI_OUT/include/internal"
     rm -rf "$BUILD_DIR"
 
     BUILT+=("$ABI_OUT/libteleproto3.a")

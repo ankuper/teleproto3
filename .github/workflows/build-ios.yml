@@ -23,8 +23,16 @@ jobs:
       - name: Pack artifacts
         run: |
           cd /tmp/t3-ios-out
-          tar czf libteleproto3-ios-arm64.tar.gz -C device-arm64 .
-          tar czf libteleproto3-ios-simulator.tar.gz -C simulator .
+          # device
+          mkdir -p stage-device/lib
+          cp device-arm64/libteleproto3.a stage-device/lib/
+          cp -r device-arm64/include stage-device/lib/include
+          tar czf libteleproto3-ios-arm64.tar.gz -C stage-device .
+          # simulator
+          mkdir -p stage-sim/lib
+          cp simulator/libteleproto3.a stage-sim/lib/
+          cp -r simulator/include stage-sim/lib/include
+          tar czf libteleproto3-ios-simulator.tar.gz -C stage-sim .
 
       - name: Upload artifact (device)
         uses: actions/upload-artifact@v4
@@ -46,6 +54,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG=${GITHUB_REF##*/}
+          # Create release if it doesn't exist yet (no-op if already exists)
+          gh release create "$TAG" --title "$TAG" --prerelease 2>/dev/null || true
           gh release upload "$TAG" /tmp/t3-ios-out/libteleproto3-ios-arm64.tar.gz \
             --repo "${{ github.repository }}"
           gh release upload "$TAG" /tmp/t3-ios-out/libteleproto3-ios-simulator.tar.gz \

@@ -290,6 +290,7 @@ build_slice() {
 
     cp "$ARTIFACT" "$SLICE_OUT/libteleproto3.a"
     cp -r "$INCLUDE_SRC" "$SLICE_OUT/include"
+    rm -rf "$SLICE_OUT/include/internal"
 
     printf 'Slice %s: %s\n' "$SLICE_NAME" "$SLICE_OUT/libteleproto3.a"
 }
@@ -304,6 +305,7 @@ build_slice "device-arm64" "iphoneos" "arm64" "$OPENSSL_DEVICE_ROOT"
 
 SIM_ARM64_BUILD="$(mktemp -d /tmp/t3-sim-arm64-XXXXXX)"
 SIM_X86_BUILD="$(mktemp -d /tmp/t3-sim-x86-XXXXXX)"
+trap 'rm -rf "$SIM_ARM64_BUILD" "$SIM_X86_BUILD"' EXIT
 
 printf '\n=== Building libteleproto3 simulator arm64 ===\n'
 
@@ -383,8 +385,7 @@ mkdir -p "$SIM_OUT"
 
 lipo -create "$SIM_ARM64_A" "$SIM_X86_A" -output "$SIM_OUT/libteleproto3.a"
 cp -r "$INCLUDE_SRC" "$SIM_OUT/include"
-
-rm -rf "$SIM_ARM64_BUILD" "$SIM_X86_BUILD"
+rm -rf "$SIM_OUT/include/internal"
 
 # ── Summary ────────────────────────────────────────────────────────────────────
 printf '\n=== build-ios.sh complete ===\n'
