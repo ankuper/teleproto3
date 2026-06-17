@@ -64,6 +64,20 @@ static int t3_sock_set_nonblocking(int fd) {
 static int t3_sock_startup(void) { return 0; }
 #endif
 
+/* POSIX string helpers missing from MSVC's CRT. */
+#ifdef _WIN32
+static char *t3c_strndup(const char *s, size_t n) {
+    size_t len = strnlen(s, n);
+    char *r = (char *)malloc(len + 1);
+    if (r) { memcpy(r, s, len); r[len] = '\0'; }
+    return r;
+}
+#  define strndup t3c_strndup
+#  ifndef strdup
+#    define strdup _strdup
+#  endif
+#endif
+
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
