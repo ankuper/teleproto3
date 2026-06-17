@@ -12,6 +12,23 @@ declares the `spec-vX.Y.Z` range it implements — see `VERSION`.
   (Story 9-1 D6). New constants `T3_SHIM_CRED_LEN` (32) and
   `T3_SHIM_CRED_BUFLEN` (33) declared in `t3_shim_socks5.h`.
 
+## [lib-v0.7.0] — 2026-06-17
+
+### Added
+- CMake: `CMAKE_SYSTEM_NAME=iOS` now recognised — maps to `macos` CSPRNG
+  backend (`SecRandomCopyBytes`) and links `Security.framework` automatically.
+- CI: prebuilt `libteleproto3.a` for **iOS** (device arm64) and **iOS
+  simulator** (fat arm64+x86_64) shipped in GitHub releases.
+- CI: prebuilt `libteleproto3.a` for **Android** all four ABIs
+  (`arm64-v8a`, `armeabi-v7a`, `x86`, `x86_64`) shipped in GitHub releases.
+  Built with NDK r26d + inline OpenSSL 3.x cross-compile (no Telegram-Android
+  BoringSSL dependency).
+- `ci/build-ios.sh` — local cross-compile script for iOS device + simulator.
+- `ci/build-android-release.sh` — CI-grade Android cross-compile script.
+
+### Stability note
+ABI unchanged — no existing function signature or enumerant changed.
+
 ## [lib-v0.6.0] — 2026-06-17
 
 ### Fixed
