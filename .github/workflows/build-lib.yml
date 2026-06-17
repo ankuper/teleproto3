@@ -13,7 +13,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  # ── Linux: static .a for x86_64 + aarch64 (server, tdlib, tdesktop-linux) ────
+  build-linux:
     strategy:
       matrix:
         include:
@@ -51,8 +52,110 @@ jobs:
           name: libteleproto3-linux-${{ matrix.arch }}
           path: ${{ env.ASSET }}
 
+  # ── macOS: static .a for x86_64 (Intel) + arm64 (Apple Silicon) ──────────────
+  # tdesktop-mac consumes this; native-arch runner per matrix entry.
+  build-macos:
+    strategy:
+      matrix:
+        include:
+          - os: macos-13      # Intel runner
+            arch: x86_64
+          - os: macos-14      # Apple Silicon runner
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: brew install cmake openssl@3
+
+      - name: Build libteleproto3
+        run: |
+          cmake -S lib -B lib/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DT3_BUILD_CLIENT=ON \
+            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          cmake --build lib/build -j$(sysctl -n hw.ncpu)
+
+      - name: Run tests
+        run: cd lib/build && ctest --output-on-failure
+
+      - name: Package
+        run: |
+          ARCH=${{ matrix.arch }}
+          mkdir -p dist/include
+          cp lib/build/libteleproto3.a dist/
+          cp lib/include/t3.h lib/include/t3_client.h lib/include/t3_features.h dist/include/
+          tar czf libteleproto3-macos-${ARCH}.tar.gz -C dist .
+          echo "ASSET=libteleproto3-macos-${ARCH}.tar.gz" >> $GITHUB_ENV
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-macos-${{ matrix.arch }}
+          path: ${{ env.ASSET }}
+
+  # ── Windows: static teleproto3.lib (MSVC x64, /MT static CRT) ────────────────
+  # Built with the static CRT (MultiThreaded) so it links cleanly against
+  # tdesktop's /MT binaries — a /MD lib would trigger LNK2038 RuntimeLibrary
+  # mismatch. OpenSSL is referenced by symbol only and resolved at the
+  # consumer's final link against its own OpenSSL; we just need the headers here.
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC env (x64)
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: x64
+
+      - name: Locate OpenSSL 3
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "C:\Program Files\OpenSSL",
+            "C:\Program Files\OpenSSL-Win64",
+            "C:\OpenSSL-Win64",
+            "C:\vcpkg\installed\x64-windows"
+          )
+          $found = $null
+          foreach ($p in $candidates) {
+            if (Test-Path "$p\include\openssl\opensslv.h") { $found = $p; break }
+          }
+          if (-not $found) { Write-Error "OpenSSL not located in any candidate path"; exit 1 }
+          echo "OPENSSL_ROOT_DIR=$found" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "OPENSSL_ROOT_DIR=$found"
+
+      - name: Build libteleproto3 (/MT)
+        shell: cmd
+        run: |
+          cd lib
+          cmake -B build -G "Ninja" ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DT3_BUILD_CLIENT=ON ^
+            -DT3_BUILD_TESTS=OFF ^
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
+            -DOPENSSL_ROOT_DIR="%OPENSSL_ROOT_DIR%"
+          cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist\include | Out-Null
+          Copy-Item lib\build\teleproto3.lib dist\
+          Copy-Item lib\include\t3.h,lib\include\t3_client.h,lib\include\t3_features.h dist\include\
+          Compress-Archive -Path dist\* -DestinationPath libteleproto3-windows-x86_64.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-windows-x86_64
+          path: libteleproto3-windows-x86_64.zip
+
+  # ── Release: attach every platform's archive to the latest GitHub Release ────
   release:
-    needs: build
+    needs: [build-linux, build-macos, build-windows]
     if: startsWith(github.ref, 'refs/tags/lib-v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -63,9 +166,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq .tag_name)
-          for f in libteleproto3-linux-*/libteleproto3-linux-*.tar.gz; do
+          shopt -s nullglob
+          for f in libteleproto3-*/libteleproto3-*.tar.gz libteleproto3-*/libteleproto3-*.zip; do
             NAME=$(basename "$f")
-            # Delete existing asset with same name
+            # Replace any existing asset of the same name (re-runnable).
             ASSET_ID=$(gh api "repos/${{ github.repository }}/releases/tags/$TAG" --jq ".assets[] | select(.name==\"$NAME\") | .id" 2>/dev/null || true)
             [ -n "$ASSET_ID" ] && gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$ASSET_ID" 2>/dev/null || true
             gh release upload "$TAG" "$f" --repo "${{ github.repository }}"
