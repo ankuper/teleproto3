@@ -1,0 +1,52 @@
+name: Build iOS prebuilt
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build iOS artifacts
+        run: |
+          chmod +x ci/build-ios.sh
+          ci/build-ios.sh --out /tmp/t3-ios-out
+
+      - name: Pack artifacts
+        run: |
+          cd /tmp/t3-ios-out
+          tar czf libteleproto3-ios-arm64.tar.gz -C device-arm64 .
+          tar czf libteleproto3-ios-simulator.tar.gz -C simulator .
+
+      - name: Upload artifact (device)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-ios-arm64
+          path: /tmp/t3-ios-out/libteleproto3-ios-arm64.tar.gz
+          if-no-files-found: error
+
+      - name: Upload artifact (simulator)
+        uses: actions/upload-artifact@v4
+        with:
+          name: libteleproto3-ios-simulator
+          path: /tmp/t3-ios-out/libteleproto3-ios-simulator.tar.gz
+          if-no-files-found: error
+
+      - name: Upload to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG=${GITHUB_REF##*/}
+          gh release upload "$TAG" /tmp/t3-ios-out/libteleproto3-ios-arm64.tar.gz \
+            --repo "${{ github.repository }}"
+          gh release upload "$TAG" /tmp/t3-ios-out/libteleproto3-ios-simulator.tar.gz \
+            --repo "${{ github.repository }}"
