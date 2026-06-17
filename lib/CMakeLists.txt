@@ -212,6 +212,10 @@ endif()
 # -----------------------------------------------------------------------
 if(MSVC)
     target_compile_options(teleproto3 PRIVATE /W4 /WX /std:c11)
+    # MSVC flags POSIX-standard CRT functions (strerror, strdup, …) as C4996
+    # "deprecated"; with /WX that aborts the build. We use them deliberately
+    # behind the _WIN32 portability shims, so silence the deprecation class.
+    target_compile_definitions(teleproto3 PRIVATE _CRT_SECURE_NO_WARNINGS)
     # Ensure consumers can include t3.h without importing from a DLL.
     # Static archive only; dllimport/dllexport not needed.
     target_compile_definitions(teleproto3 PUBLIC T3_STATIC_LIB)
