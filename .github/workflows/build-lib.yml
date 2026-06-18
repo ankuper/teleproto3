@@ -184,10 +184,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Install NDK
         run: |
-          yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" \
-              "ndk;${NDK_VERSION}" || true
+          sdkmanager --install "ndk;${NDK_VERSION}"
           NDK_PATH="${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION}"
           [[ -d "$NDK_PATH" ]] || { echo "error: NDK not found at $NDK_PATH" >&2; exit 1; }
           echo "NDK_ROOT=${NDK_PATH}" >> "$GITHUB_ENV"
