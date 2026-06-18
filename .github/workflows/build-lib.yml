@@ -58,18 +58,18 @@ jobs:
           path: ${{ env.ASSET }}
 
   # ── macOS: static .a for arm64 + x86_64 ─────────────────────────────────────
-  # arm64 on macos-14 (Apple Silicon, fast). x86_64 on macos-13 (Intel);
-  # macos-13 is slow to queue for push CIs but acceptable for tagged releases.
-  # tdesktop-mac consumes both: macos-latest for arm64, macos-13 for x86_64.
+  # Both built on macos-14 (Apple Silicon, fast queue). x86_64 is cross-compiled
+  # via -DCMAKE_OSX_ARCHITECTURES=x86_64 + Rosetta x86_64 OpenSSL bottle.
+  # macos-13 (Intel) was avoided: runners are being retired and queue for hours.
   build-macos:
     strategy:
       matrix:
         include:
-          - os: macos-14      # Apple Silicon runner
-            arch: arm64
-          - os: macos-13      # Intel runner (slow queue, needed for x86_64)
-            arch: x86_64
-    runs-on: ${{ matrix.os }}
+          - arch: arm64
+            cmake_arch_flags: ""
+          - arch: x86_64
+            cmake_arch_flags: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
 
@@ -78,13 +78,25 @@ jobs:
 
       - name: Build libteleproto3
         run: |
+          # For x86_64 cross-compile: the .a is a static archive — the compiler
+          # needs only the OpenSSL HEADERS (arch-neutral C), not the arm64 .a libs.
+          # CMake configure uses arm64 OpenSSL paths (they exist as files, so
+          # find_package(OpenSSL) succeeds); tests are disabled because test
+          # executables would need x86_64-compatible OpenSSL at link time.
+          ARCH="${{ matrix.arch }}"
+          OPENSSL_ROOT="$(brew --prefix openssl@3)"
+          TESTS_FLAG=""
+          [ "$ARCH" = "x86_64" ] && TESTS_FLAG="-DT3_BUILD_TESTS=OFF"
           cmake -S lib -B lib/build \
             -DCMAKE_BUILD_TYPE=Release \
             -DT3_BUILD_CLIENT=ON \
-            -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+            -DOPENSSL_ROOT_DIR="$OPENSSL_ROOT" \
+            ${{ matrix.cmake_arch_flags }} \
+            $TESTS_FLAG
           cmake --build lib/build -j$(sysctl -n hw.ncpu)
 
       - name: Run tests
+        if: matrix.arch == 'arm64'
         run: cd lib/build && ctest --output-on-failure
 
       - name: Package
