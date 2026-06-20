@@ -32,6 +32,20 @@ int t3c_obfs2_generate_init(const uint8_t secret[16], int16_t dc_id,
                             t3c_aes_ctx *encrypt_ctx,
                             t3c_aes_ctx *decrypt_ctx);
 
+/* Generate a SOCKS5-tunnel obfs2 init header (story 9.2 AC1).
+ *
+ * Identical to t3c_obfs2_generate_init EXCEPT the dc_id slot at header[60:62]
+ * is stamped with the sentinel 0x5353 ('S','S') instead of a target DC, while
+ * the canonical padded-intermediate tag 0xdddddddd at header[56:60] is kept.
+ * There is no dc_id parameter (the sentinel takes its place). Same reserved-
+ * prefix reroll / KDF / AES-CTR context setup. Returns 0 on success, -1 on
+ * failure.
+ */
+int t3c_obfs2_generate_init_tunnel(const uint8_t secret[16],
+                                   uint8_t header_out[64],
+                                   t3c_aes_ctx *encrypt_ctx,
+                                   t3c_aes_ctx *decrypt_ctx);
+
 /* AES-CTR encrypt or decrypt (symmetric). In-place safe. */
 int t3c_aes_crypt(t3c_aes_ctx *ctx, const uint8_t *in, uint8_t *out, size_t len);
 
