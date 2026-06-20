@@ -58,6 +58,12 @@ if(T3_BUILD_TESTS AND NOT WIN32)
     set(T3_BUILD_CLIENT ON CACHE BOOL "Build client-side transport layer" FORCE)
 endif()
 
+# The SOCKS5 shim (story 9.2) drives its transport through the t3_client_* API,
+# so it requires the client layer. Force it on whenever the shim is built.
+if(T3_SHIM_SOCKS5)
+    set(T3_BUILD_CLIENT ON CACHE BOOL "Build client-side transport layer" FORCE)
+endif()
+
 
 # -----------------------------------------------------------------------
 # Per-platform CSPRNG backend selection
@@ -371,7 +377,22 @@ if(T3_BUILD_TESTS)
         # Register the Python pytest suite as a ctest entry.
         # Requires Python 3 + pytest + cryptography in the test environment.
         find_program(Python3_EXECUTABLE NAMES python3 python)
+        # Only register the pytest suites when pytest is actually importable —
+        # otherwise `python3 -m pytest` would exit non-zero and fail ctest on a
+        # runner that has python3 but not pytest. (cryptography-missing is handled
+        # inside the tests via skipif.)
+        set(_t3_have_pytest FALSE)
         if(Python3_EXECUTABLE)
+            execute_process(
+                COMMAND ${Python3_EXECUTABLE} -c "import pytest"
+                RESULT_VARIABLE _t3_pytest_rc OUTPUT_QUIET ERROR_QUIET)
+            if(_t3_pytest_rc EQUAL 0)
+                set(_t3_have_pytest TRUE)
+            else()
+                message(STATUS "teleproto3: python3 found but pytest missing — SOCKS5 pytest suites not registered")
+            endif()
+        endif()
+        if(_t3_have_pytest)
             add_test(
                 NAME socks5_conformance
                 COMMAND ${Python3_EXECUTABLE} -m pytest -v
@@ -379,6 +400,20 @@ if(T3_BUILD_TESTS)
                 WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
             )
             set_tests_properties(socks5_conformance PROPERTIES
+                ENVIRONMENT "T3_SHIM_STUB_BIN=$<TARGET_FILE:test_shim_stub>"
+                TIMEOUT 120
+            )
+
+            # Byte-shape conformance (story 9.2 AC2/AC4): no WS upgrade / no WS
+            # frames on the wire, obfs2 sentinel decoded server-side, and a
+            # length-delimited CONNECT round-trip through an HTTP-stream mock.
+            add_test(
+                NAME socks5_byteshape
+                COMMAND ${Python3_EXECUTABLE} -m pytest -v
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/socks5_byteshape_test.py
+                WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+            )
+            set_tests_properties(socks5_byteshape PROPERTIES
                 ENVIRONMENT "T3_SHIM_STUB_BIN=$<TARGET_FILE:test_shim_stub>"
                 TIMEOUT 120
             )
@@ -425,6 +460,25 @@ if(T3_BUILD_TESTS)
             target_compile_options(test_t3_client PRIVATE -Wall -Wextra -Wpedantic -Werror)
         endif()
         add_test(NAME t3_client COMMAND test_t3_client)
+    endif()
+
+    # story 9.2 AC1: tunnel-sentinel unit tests (t3c_obfs2_generate_init_tunnel).
+    # Requires T3_BUILD_CLIENT (t3c_aes_ctx / t3c_obfs2_generate_init* in
+    # src/t3_client_crypto.h). Mirrors the test_t3_client block above. Was an
+    # ATDD red-phase scaffold (link-failed until AC1 landed); now a normal test.
+    if(T3_BUILD_CLIENT)
+        add_executable(test_tunnel_sentinel tests/unit/test_tunnel_sentinel.c)
+        target_include_directories(test_tunnel_sentinel PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
+            ${CMAKE_CURRENT_SOURCE_DIR}/src
+        )
+        target_link_libraries(test_tunnel_sentinel PRIVATE teleproto3)
+        target_compile_features(test_tunnel_sentinel PRIVATE c_std_11)
+        if(NOT MSVC)
+            target_compile_options(test_tunnel_sentinel PRIVATE -Wall -Wextra -Wpedantic -Werror)
+        endif()
+        add_test(NAME tunnel_sentinel COMMAND test_tunnel_sentinel)
     endif()
 
 endif()

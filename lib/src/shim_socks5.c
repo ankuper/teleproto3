@@ -1,447 +1,286 @@
 /*
- * shim_socks5.c — localhost SOCKS5/CONNECT shim tunnelling through Type3 WSS.
+ * shim_socks5.c — localhost SOCKS5/CONNECT shim tunnelling through Type3
+ * HTTP-stream (story 9.2; originally story 9-1).
  *
- * Story 9-1 (AC #1, #2). Build-flag-gated by T3_SHIM_SOCKS5=ON.
+ * Story 9-1 built this as a hand-rolled WebSocket stack. Story 9.2 re-bases the
+ * transport onto the canonical t3_client_* API (HTTP-stream ONLY — POST +
+ * chunked, AES-CTR, obfs2 init). There is NO WebSocket upgrade and NO WS frame
+ * anywhere on the wire: the WS upgrade was exactly the TSPU/DPI fingerprint the
+ * project eliminated for chats. Build-flag-gated by T3_SHIM_SOCKS5=ON; requires
+ * T3_BUILD_CLIENT (the t3_client transport it links against).
  *
- * // XXX 9-2: jitter randomization required before public-release widening
- * //          (CBR-tell verdict BLOCK 2026-05-09; see
- * //          _bmad-output/experiments/cbr-tell-2026-05-08/RESULT.md).
+ * Transport model (all TLS/crypto/framing delegated to t3_client_*):
+ *   t3_client_create_tunnel(url, secret) -> pump to READY -> write/read -> destroy
+ * The tunnel-mode obfs2 init stamps the SOCKS5 sentinel 0x5353 at header[60:62]
+ * (in place of a dc_id) and keeps the canonical padded-intermediate tag
+ * 0xdddddddd at [56:60]; a tag-agnostic server (story 9.4) dispatches a tunnel
+ * connection on that sentinel — the sentinel is the sole trigger.
+ *
+ * Length-delimited inner framing (PINNED design):
+ *   t3_client_write injects 0-15 bytes of intermediate padding and t3_client_read
+ *   returns the payload PLUS that padding, so a raw byte stream cannot recover
+ *   its exact length. Every tunnel message is therefore wrapped with a 2-byte
+ *   little-endian length prefix INSIDE the t3_client payload:
+ *       send: t3_client_write([len:2 LE][bytes])
+ *       recv: t3_client_read -> [len:2 LE][bytes][t3 padding]; take exactly len
+ *   This keeps t3_client's padding/jitter shaping ("inherits padding") while
+ *   making the SOCKS5 byte stream byte-exact end to end. The story 9.4 server
+ *   MUST strip the 2-byte LE prefix on receive and prepend it on send.
+ *
+ * TLS posture: t3_client uses SSL_VERIFY_NONE — TLS is camouflage; the obfs2
+ * handshake + 16-byte secret authenticate the server (the Type3 threat model).
+ * This shim deliberately delegates ALL TLS/crypto to t3_client; it keeps no
+ * bespoke certificate verification of its own.
  *
  * Architecture: one accept thread per shim, one detached tunnel thread per
- * connection. Thread-per-connection is correct for ≤5 dogfood users.
+ * connection. Thread-per-connection is correct for <=5 dogfood users.
  * TCP_NODELAY set on accepted client sockets per CBR-experiment lesson.
  *
- * Crypto (wire-format.md §4.2, canonical KDF from mtproxy3-legacy):
- *   enc_key = SHA256(rh[8:40] || sk)      enc_iv = rh[40:56]
- *   dec_key = SHA256(rev(rh[24:56]) || sk) dec_iv = rev(rh[8:24])
- * rh = 64-byte random header with magic tag at [56:60).
- * enc = client→server direction; dec = server→client direction.
+ * // XXX 9-3: timing jitter required before public-release widening
+ * //          (CBR-tell verdict BLOCK 2026-05-09; see
+ * //          _bmad-output/experiments/cbr-tell-2026-05-08/RESULT.md).
  */
 
 #include "t3_shim_socks5.h"
+#include "t3_client.h"
 
-#include <arpa/inet.h>
 #include <errno.h>
-#include <netdb.h>
-#include <netinet/tcp.h>
-#include <poll.h>
-#include <pthread.h>
-#include <stdatomic.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
-#include <time.h>
-#include <unistd.h>
 
-#include <openssl/crypto.h>
-#include <openssl/evp.h>
-#include <openssl/rand.h>
-#include <openssl/sha.h>
-#include <openssl/ssl.h>
+/* ── Platform layer: sockets, threads, atomics, monotonic time ──────────────
+   The shim runs a localhost SOCKS5 listener with one thread per connection plus
+   a handful of atomic counters. POSIX (Linux/macOS/Android) and Windows expose
+   all of this differently; isolate it here so the body stays platform-neutral.
+   The socket shims mirror net/t3_client_stream.c, which already builds clean on
+   the Windows (MSVC /W4 /WX) CI. */
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  include <windows.h>
+#  include <process.h>        /* _beginthreadex (CRT-safe thread spawn) */
+
+#  define SHIM_CLOSESOCKET(fd)  closesocket((SOCKET)(fd))
+#  define SHIM_POLL             WSAPoll
+#  define SHIM_MSG_PEEK_NB      MSG_PEEK   /* the probed fd is already non-blocking */
+
+static int shim_sock_intr(void) { return WSAGetLastError() == WSAEINTR; }
+
+static int shim_sock_startup(void) {
+    static int done = 0;
+    if (!done) {
+        WSADATA wsa;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return -1;
+        done = 1;
+    }
+    return 0;
+}
+static int shim_sock_set_nonblock(int fd, int on) {
+    u_long mode = on ? 1u : 0u;
+    return ioctlsocket((SOCKET)fd, FIONBIO, &mode);
+}
+
+static int64_t now_ms(void) { return (int64_t)GetTickCount64(); }
+static void shim_sleep_ms(int ms) { Sleep((DWORD)ms); }
+
+/* Threads (Win32; _beginthreadex keeps the CRT happy vs raw CreateThread). */
+typedef HANDLE shim_thread_t;
+#  define SHIM_THREAD_FN(name, argp)  static unsigned __stdcall name(void *argp)
+#  define SHIM_THREAD_RETURN          return 0u
+static int shim_thread_create(shim_thread_t *t,
+                              unsigned(__stdcall *fn)(void *), void *arg) {
+    uintptr_t h = _beginthreadex(NULL, 0, fn, arg, 0, NULL);
+    if (h == 0) return -1;
+    *t = (HANDLE)h;
+    return 0;
+}
+static void shim_thread_join(shim_thread_t t) {
+    WaitForSingleObject(t, INFINITE);
+    CloseHandle(t);
+}
+static void shim_thread_detach(shim_thread_t t) { CloseHandle(t); }
+
+/* Atomics (Interlocked — MSVC-safe regardless of <stdatomic.h> availability).
+ * The pointer is cast to non-const volatile because Interlocked* take a
+ * non-const pointer even for the read-only compare-exchange-as-load idiom, and
+ * t3_shim_stats() reads through a `const t3_shim_t *` (would otherwise be C4090).
+ * POSIX atomic_load accepts const, so only the Windows macros need the cast. */
+typedef volatile LONG     shim_atomic_i32;
+typedef volatile LONGLONG shim_atomic_i64;
+#  define SHIM_A_STORE(p, v)  ((void)InterlockedExchange((volatile LONG *)(p), (LONG)(v)))
+#  define SHIM_A_LOAD(p)      ((LONG)InterlockedCompareExchange((volatile LONG *)(p), 0, 0))
+#  define SHIM_A_ADD(p, v)    ((void)InterlockedExchangeAdd((volatile LONG *)(p), (LONG)(v)))
+#  define SHIM_A_LOAD64(p)    ((LONGLONG)InterlockedCompareExchange64((volatile LONGLONG *)(p), 0, 0))
+#  define SHIM_A_ADD64(p, v)  ((void)InterlockedExchangeAdd64((volatile LONGLONG *)(p), (LONGLONG)(v)))
+#else
+#  include <arpa/inet.h>
+#  include <fcntl.h>
+#  include <netinet/tcp.h>
+#  include <poll.h>
+#  include <pthread.h>
+#  include <stdatomic.h>
+#  include <sys/socket.h>
+#  include <time.h>
+#  include <unistd.h>
+
+#  define SHIM_CLOSESOCKET(fd)  close(fd)
+#  define SHIM_POLL             poll
+#  define SHIM_MSG_PEEK_NB      (MSG_PEEK | MSG_DONTWAIT)
+
+static int shim_sock_intr(void) { return errno == EINTR; }
+static int shim_sock_startup(void) { return 0; }
+static int shim_sock_set_nonblock(int fd, int on) {
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) return -1;
+    flags = on ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+    return fcntl(fd, F_SETFL, flags);
+}
+
+static int64_t now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+static void shim_sleep_ms(int ms) {
+    struct timespec ts = { ms / 1000, (long)(ms % 1000) * 1000000L };
+    nanosleep(&ts, NULL);
+}
+
+typedef pthread_t shim_thread_t;
+#  define SHIM_THREAD_FN(name, argp)  static void *name(void *argp)
+#  define SHIM_THREAD_RETURN          return NULL
+static int shim_thread_create(shim_thread_t *t,
+                              void *(*fn)(void *), void *arg) {
+    return pthread_create(t, NULL, fn, arg) == 0 ? 0 : -1;
+}
+static void shim_thread_join(shim_thread_t t) { pthread_join(t, NULL); }
+static void shim_thread_detach(shim_thread_t t) { pthread_detach(t); }
+
+typedef atomic_int            shim_atomic_i32;
+typedef atomic_uint_least64_t shim_atomic_i64;
+#  define SHIM_A_STORE(p, v)  atomic_store((p), (v))
+#  define SHIM_A_LOAD(p)      atomic_load((p))
+#  define SHIM_A_ADD(p, v)    ((void)atomic_fetch_add((p), (v)))
+#  define SHIM_A_LOAD64(p)    atomic_load((p))
+#  define SHIM_A_ADD64(p, v)  ((void)atomic_fetch_add((p), (v)))
+#endif
+
+#include <openssl/crypto.h>   /* CRYPTO_memcmp — constant-time credential compare */
+#include <openssl/rand.h>     /* RAND_bytes — per-shim SOCKS5 USER/PASS */
 
 #define SHIM_BUF 16384
 
-/* ================================================================
- * Crypto helpers
- * ================================================================ */
-
-static void sha256_cat(const uint8_t *a, size_t al,
-                       const uint8_t *b, size_t bl,
-                       uint8_t out[32]) {
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    unsigned int mdlen = 32;
-    EVP_DigestInit_ex(ctx, EVP_sha256(), NULL);
-    EVP_DigestUpdate(ctx, a, al);
-    EVP_DigestUpdate(ctx, b, bl);
-    EVP_DigestFinal_ex(ctx, out, &mdlen);
-    EVP_MD_CTX_free(ctx);
-}
-
-/* SHA1 over `in` (used for RFC 6455 Sec-WebSocket-Accept derivation, P6). */
-static void sha1_data(const uint8_t *in, size_t in_len, uint8_t out[20]) {
-    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
-    unsigned int mdlen = 20;
-    EVP_DigestInit_ex(ctx, EVP_sha1(), NULL);
-    EVP_DigestUpdate(ctx, in, in_len);
-    EVP_DigestFinal_ex(ctx, out, &mdlen);
-    EVP_MD_CTX_free(ctx);
-}
-
-/* Standard RFC 4648 base64 (no URL-safe). Writes `out_cap`-bounded NUL-terminated string.
- * Returns the length of the base64 string (excluding NUL), or -1 if buffer too small.
- * Used for Sec-WebSocket-Key generation (16 random bytes -> 24-char b64 with `==`)
- * and Sec-WebSocket-Accept verification (P5, P6). */
-static int b64_encode(const uint8_t *in, size_t in_len, char *out, size_t out_cap) {
-    static const char t[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    size_t out_len = ((in_len + 2) / 3) * 4;
-    if (out_len + 1 > out_cap) return -1;
-    size_t i, j = 0;
-    for (i = 0; i + 3 <= in_len; i += 3) {
-        uint32_t v = ((uint32_t)in[i] << 16) | ((uint32_t)in[i+1] << 8) | in[i+2];
-        out[j++] = t[(v >> 18) & 63];
-        out[j++] = t[(v >> 12) & 63];
-        out[j++] = t[(v >> 6)  & 63];
-        out[j++] = t[ v        & 63];
-    }
-    size_t rem = in_len - i;
-    if (rem == 1) {
-        uint32_t v = ((uint32_t)in[i] << 16);
-        out[j++] = t[(v >> 18) & 63];
-        out[j++] = t[(v >> 12) & 63];
-        out[j++] = '=';
-        out[j++] = '=';
-    } else if (rem == 2) {
-        uint32_t v = ((uint32_t)in[i] << 16) | ((uint32_t)in[i+1] << 8);
-        out[j++] = t[(v >> 18) & 63];
-        out[j++] = t[(v >> 12) & 63];
-        out[j++] = t[(v >> 6)  & 63];
-        out[j++] = '=';
-    }
-    out[j] = 0;
-    return (int)j;
-}
-
-/* Locate `name:` header (case-insensitive per RFC 7230) in HTTP response `data`.
- * Returns pointer to value (whitespace stripped), or NULL if absent. Used for
- * Sec-WebSocket-Accept verification (P6). */
-static const char *find_header_icase(const char *data, size_t len, const char *name) {
-    size_t nlen = strlen(name);
-    for (size_t i = 0; i + nlen + 1 < len; i++) {
-        if (i != 0 && data[i-1] != '\n') continue;
-        int match = 1;
-        for (size_t j = 0; j < nlen; j++) {
-            char a = data[i + j], b = name[j];
-            if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
-            if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
-            if (a != b) { match = 0; break; }
-        }
-        if (match && data[i + nlen] == ':') {
-            const char *v = data + i + nlen + 1;
-            const char *end = data + len;
-            while (v < end && (*v == ' ' || *v == '\t')) v++;
-            return v;
-        }
-    }
-    return NULL;
-}
-
-static void derive_keys(const uint8_t rh[64], const uint8_t sk[16],
-                        uint8_t ek[32], uint8_t ei[16],
-                        uint8_t dk[32], uint8_t di[16]) {
-    sha256_cat(rh + 8, 32, sk, 16, ek);
-    memcpy(ei, rh + 40, 16);
-    uint8_t rev[32];
-    for (int i = 0; i < 32; i++) rev[i] = rh[55 - i];
-    sha256_cat(rev, 32, sk, 16, dk);
-    for (int i = 0; i < 16; i++) di[i] = rh[23 - i];
-}
-
-/* Build 64-byte random_header:
- *  - bytes [56:60): obfuscated2 magic tag (COMPACT = 0xEFEFEFEF)
- *  - bytes [60:62): SOCKS5-tunnel DC sentinel (0x5353) so the server
- *    detects this as a SOCKS5/CONNECT connection instead of routing to
- *    a Telegram DC.  Value 0x5353 is outside the valid DC range (1–5).
- * Both patches are in the clear after AES-CTR decryption by the server.
- * KDF input ranges: ek from rh[8:40], ei from rh[40:56] — neither
- * overlaps [56:64], so key derivation is unaffected by the patches. */
-/* Returns 0 on success, -1 if OpenSSL CSPRNG fails (P3).
- * The previous body was a `for(;;)` loop with a tautological tag-verify
- * (the tag was forced via XOR-patch then re-checked); removed as dead code
- * per P9 — tag value 0xEFEFEFEF is deterministic by construction. */
-static int make_random_header(const uint8_t sk[16], uint8_t rh[64]) {
-    static const uint32_t MAGIC = 0xEFEFEFEFu;
-    static const int16_t  SOCKS5_DC = 0x5353;
-
-    if (RAND_bytes(rh, 64) != 1) return -1;  /* P3 */
-
-    uint8_t ek[32], ei[16], dk[32], di[16];
-    derive_keys(rh, sk, ek, ei, dk, di);
-
-    EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) return -1;
-    EVP_EncryptInit_ex(ctx, EVP_aes_256_ctr(), NULL, ek, ei);
-    uint8_t z[64] = {0}, ks[64];
-    int n = 64;
-    EVP_EncryptUpdate(ctx, ks, &n, z, 64);
-    EVP_CIPHER_CTX_free(ctx);
-
-    /* patch bytes [56:60) so server decrypts the magic tag 0xEFEFEFEF */
-    uint8_t m[4];
-    memcpy(m, &MAGIC, 4);
-    for (int i = 0; i < 4; i++) rh[56 + i] = m[i] ^ ks[56 + i];
-
-    /* patch bytes [60:62) so server decrypts SOCKS5_DC sentinel 0x5353 */
-    uint8_t dc[2];
-    memcpy(dc, &SOCKS5_DC, 2);
-    for (int i = 0; i < 2; i++) rh[60 + i] = dc[i] ^ ks[60 + i];
-
-    return 0;
-}
+/* Bounded waits (ms). Generous for high-latency CDN paths; the local SOCKS5
+ * client times out independently if these are exceeded. */
+#define TUNNEL_CONNECT_TIMEOUT_MS   15000
+#define TUNNEL_HANDSHAKE_TIMEOUT_MS 15000
 
 /* ================================================================
- * WebSocket helpers (synchronous, blocking SSL I/O)
- * ================================================================ */
-
-/* Send a client-masked binary WS frame over ssl. */
-static int ws_send(SSL *ssl, const uint8_t *payload, size_t len) {
-    uint8_t hdr[14];
-    int hi = 0;
-    hdr[hi++] = 0x82;  /* FIN + binary opcode */
-    uint8_t mask[4];
-    if (RAND_bytes(mask, 4) != 1) return -1;  /* P3 */
-    if (len < 126) {
-        hdr[hi++] = (uint8_t)(0x80 | len);
-    } else if (len <= 65535) {
-        hdr[hi++] = 0x80 | 126;
-        hdr[hi++] = (uint8_t)(len >> 8);
-        hdr[hi++] = (uint8_t)len;
-    } else {
-        hdr[hi++] = 0x80 | 127;
-        for (int i = 7; i >= 0; i--) hdr[hi++] = (uint8_t)(len >> (i * 8));
-    }
-    memcpy(hdr + hi, mask, 4);
-    hi += 4;
-    if (SSL_write(ssl, hdr, hi) <= 0) return -1;
-    /* Mask payload in chunks and send */
-    uint8_t chunk[4096];
-    for (size_t off = 0; off < len; ) {
-        size_t n = len - off < sizeof(chunk) ? len - off : sizeof(chunk);
-        for (size_t i = 0; i < n; i++) chunk[i] = payload[off + i] ^ mask[(off + i) % 4];
-        if (SSL_write(ssl, chunk, (int)n) <= 0) return -1;
-        off += n;
-    }
-    return 0;
-}
-
-/* Read one complete unmasked server WS frame, skip control/text frames.
- * Returns payload length (≥0), or -1 on error. */
-static int ws_recv_frame(SSL *ssl, uint8_t *buf, int cap) {
-    for (;;) {
-        uint8_t h2[2];
-        int r = SSL_read(ssl, h2, 2);
-        if (r != 2) return -1;
-        int opcode = h2[0] & 0x0F;
-        size_t len = h2[1] & 0x7F;
-        if (len == 126) {
-            uint8_t e[2];
-            if (SSL_read(ssl, e, 2) != 2) return -1;
-            len = ((size_t)e[0] << 8) | e[1];
-        } else if (len == 127) {
-            uint8_t e[8];
-            if (SSL_read(ssl, e, 8) != 8) return -1;
-            len = 0;
-            for (int i = 0; i < 8; i++) len = (len << 8) | e[i];
-        }
-        /* Discard control frames (PING/PONG/CLOSE) and text frames */
-        if ((opcode & 0x08) || opcode == 0x01) {
-            uint8_t sc[256];
-            while (len > 0) {
-                int rd = SSL_read(ssl, sc, (int)(len < sizeof(sc) ? len : sizeof(sc)));
-                if (rd <= 0) return -1;
-                len -= (size_t)rd;
-            }
-            continue;
-        }
-        if ((int)len > cap) return -1;
-        int got = 0;
-        while (got < (int)len) {
-            r = SSL_read(ssl, buf + got, (int)len - got);
-            if (r <= 0) return -1;
-            got += r;
-        }
-        return got;
-    }
-}
-
-/* ================================================================
- * Type3 connection
- * ================================================================ */
-
-typedef struct {
-    SSL            *ssl;
-    EVP_CIPHER_CTX *enc;
-    EVP_CIPHER_CTX *dec;
-} t3c_t;
-
-static int t3_open(SSL *ssl, const uint8_t sk[16], t3c_t *c) {
-    uint8_t rh[64];
-    if (make_random_header(sk, rh) < 0) return -1;  /* P3 */
-    uint8_t ek[32], ei[16], dk[32], di[16];
-    derive_keys(rh, sk, ek, ei, dk, di);
-
-    /* 64-byte random_header in one WS frame.
-     * Teleproxy obfuscated2 protocol expects exactly 64 bytes — no session
-     * header prefix.  (The session header is a libteleproto3 spec concept;
-     * the wire server only speaks raw obfuscated2.) */
-    if (ws_send(ssl, rh, 64) < 0) return -1;
-
-    c->ssl = ssl;
-    c->enc = EVP_CIPHER_CTX_new();
-    EVP_EncryptInit_ex(c->enc, EVP_aes_256_ctr(), NULL, ek, ei);
-    /* advance enc by 64 bytes (keystream consumed by random_header transmission) */
-    uint8_t out[64]; int n = 64;
-    EVP_EncryptUpdate(c->enc, out, &n, rh, 64);
-
-    c->dec = EVP_CIPHER_CTX_new();
-    EVP_EncryptInit_ex(c->dec, EVP_aes_256_ctr(), NULL, dk, di);
-    return 0;
-}
-
-static void t3_close(t3c_t *c) {
-    EVP_CIPHER_CTX_free(c->enc);
-    EVP_CIPHER_CTX_free(c->dec);
-}
-
-static int t3_send(t3c_t *c, const uint8_t *plain, int len) {
-    uint8_t buf[SHIM_BUF];
-    if (len > SHIM_BUF) return -1;
-    int out = len;
-    EVP_EncryptUpdate(c->enc, buf, &out, plain, len);
-    return ws_send(c->ssl, buf, out);
-}
-
-static int t3_recv(t3c_t *c, uint8_t *plain, int cap) {
-    uint8_t enc[SHIM_BUF];
-    int n = ws_recv_frame(c->ssl, enc, cap < SHIM_BUF ? cap : SHIM_BUF);
-    if (n <= 0) return n;
-    int out = n;
-    EVP_EncryptUpdate(c->dec, plain, &out, enc, n);
-    return out;
-}
-
-/* ================================================================
- * TLS + WebSocket connect
- * ================================================================ */
-
-static SSL *tls_connect_host(SSL_CTX *ctx, const char *host, uint16_t port) {
-    struct addrinfo hints = {0}, *res;
-    hints.ai_socktype = SOCK_STREAM;
-    char ps[8];
-    snprintf(ps, sizeof(ps), "%u", port);
-    if (getaddrinfo(host, ps, &hints, &res) != 0) return NULL;
-    int fd = socket(res->ai_family, SOCK_STREAM, 0);
-    int ok = fd >= 0 && connect(fd, res->ai_addr, res->ai_addrlen) == 0;
-    freeaddrinfo(res);
-    if (!ok) { if (fd >= 0) close(fd); return NULL; }
-
-    SSL *ssl = SSL_new(ctx);
-    if (!ssl) { close(fd); return NULL; }  /* P7 */
-    SSL_set_fd(ssl, fd);
-    SSL_set_tlsext_host_name(ssl, host);
-    /* P1: bind expected peer identity to the verification params so that
-     * SSL_VERIFY_PEER actually checks SAN/CN match (not just chain-trust).
-     * Without this, any CA-signed cert for any hostname would pass — MITM.
-     *
-     * IP literals (numeric host like "94.156.131.252" or "::1") must be
-     * pinned via X509_VERIFY_PARAM_set1_ip_asc — they would NOT match a
-     * SAN iPAddress entry through SSL_set1_host, which only walks dNSName
-     * entries (RFC 6125 §6.4.4: DNS names must not contain IP literals).
-     * Hostnames go through SSL_set1_host as before. */
-    {
-        X509_VERIFY_PARAM *vp = SSL_get0_param(ssl);
-        struct in_addr  v4;
-        struct in6_addr v6;
-        int is_ip = inet_pton(AF_INET, host, &v4) == 1
-                 || inet_pton(AF_INET6, host, &v6) == 1;
-        if (is_ip) {
-            if (X509_VERIFY_PARAM_set1_ip_asc(vp, host) != 1) {
-                SSL_free(ssl); close(fd); return NULL;
-            }
-        } else {
-            if (SSL_set1_host(ssl, host) != 1) {
-                SSL_free(ssl); close(fd); return NULL;
-            }
-        }
-    }
-    if (SSL_connect(ssl) <= 0) {
-        SSL_free(ssl); close(fd); return NULL;
-    }
-    return ssl;
-}
-
-/* RFC 6455 §4.1: client sends Sec-WebSocket-Key = base64(16 random bytes).
- * Server replies with Sec-WebSocket-Accept = base64(SHA1(key + GUID)) where
- * GUID is "258EAFA5-E914-47DA-95CA-C5AB0DC85B11".
- * Status line MUST be "HTTP/1.x 101 ...".
- *
- * Prior implementation (pre-9-1 review):
- *   - used 12-byte random + literal "==" appended → 18-char Sec-WebSocket-Key
- *     that is structurally invalid base64; strict servers reject (P5).
- *   - checked only `memmem(resp, off, "101", 3)` → any body containing "101"
- *     passed; never validated Sec-WebSocket-Accept (P6).
- * Both replaced below. */
-static int ws_do_upgrade(SSL *ssl, const char *host, const char *path) {
-    /* 16-byte random key per RFC 6455 §4.1 — 24-char base64 (P5). */
-    uint8_t rk[16];
-    if (RAND_bytes(rk, 16) != 1) return -1;  /* P3 */
-    char key[32];
-    if (b64_encode(rk, 16, key, sizeof(key)) < 0) return -1;
-
-    char req[512];
-    int rlen = snprintf(req, sizeof(req),
-        "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: Upgrade\r\n"
-        "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
-        "Sec-WebSocket-Key: %s\r\n\r\n",
-        path, host, key);
-    if (rlen < 0 || rlen >= (int)sizeof(req)) return -1;
-    if (SSL_write(ssl, req, rlen) <= 0) return -1;
-
-    /* Read until end of HTTP headers ("\r\n\r\n"). */
-    char resp[2048];
-    int off = 0;
-    while (1) {
-        if ((size_t)off + 1 >= sizeof(resp)) return -1;
-        if (off > 0 && memmem(resp, (size_t)off, "\r\n\r\n", 4)) break;
-        int r = SSL_read(ssl, resp + off, (int)(sizeof(resp) - 1 - off));
-        if (r <= 0) return -1;
-        off += r;
-    }
-    resp[off] = 0;
-
-    /* P6: strict status-line check — must be "HTTP/1.x 101 ...". */
-    if (off < 13 || memcmp(resp, "HTTP/1.", 7) != 0) return -1;
-    if (resp[7] != '0' && resp[7] != '1') return -1;
-    if (memcmp(resp + 8, " 101", 4) != 0) return -1;
-    /* Char after "101" must be SP/HTAB/CR/LF — guards against "1010" etc. */
-    char term = resp[12];
-    if (term != ' ' && term != '\t' && term != '\r' && term != '\n') return -1;
-
-    /* P6: verify Sec-WebSocket-Accept = base64(SHA1(key + GUID)). */
-    static const char GUID[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-    char accept_input[32 + sizeof(GUID)];
-    size_t kl = strlen(key);
-    if (kl + sizeof(GUID) - 1 > sizeof(accept_input)) return -1;
-    memcpy(accept_input, key, kl);
-    memcpy(accept_input + kl, GUID, sizeof(GUID) - 1);
-    uint8_t sha[20];
-    sha1_data((uint8_t *)accept_input, kl + sizeof(GUID) - 1, sha);
-    char expected[32];
-    if (b64_encode(sha, 20, expected, sizeof(expected)) < 0) return -1;
-
-    const char *hv = find_header_icase(resp, (size_t)off, "Sec-WebSocket-Accept");
-    if (!hv) return -1;
-    size_t el = strlen(expected);
-    if (memcmp(hv, expected, el) != 0) return -1;
-    char post = hv[el];
-    if (post != '\r' && post != '\n' && post != ' ' && post != '\t') return -1;
-
-    return 0;
-}
-
-/* ================================================================
- * SOCKS5 helpers
+ * Local SOCKS5 client socket I/O (blocking fd)
  * ================================================================ */
 
 static int read_exact(int fd, uint8_t *buf, int len) {
     int got = 0;
     while (got < len) {
-        ssize_t r = recv(fd, buf + got, (size_t)(len - got), 0);
+        int r = recv(fd, (char *)(buf + got), len - got, 0);
         if (r <= 0) return -1;
-        got += (int)r;
+        got += r;
     }
     return 0;
+}
+
+static int send_all(int fd, const uint8_t *buf, size_t len) {
+    size_t sent = 0;
+    while (sent < len) {
+        int n = send(fd, (const char *)(buf + sent), (int)(len - sent), 0);
+        if (n <= 0) return -1;
+        sent += (size_t)n;
+    }
+    return 0;
+}
+
+/* Send a 10-byte SOCKS5 reply (BND.ADDR = 0.0.0.0:0) with the given REP code. */
+static void socks5_reply(int cfd, uint8_t rep) {
+    uint8_t r[10] = {0x05, rep, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+    (void)send(cfd, (const char *)r, (int)sizeof(r), 0);
+}
+
+/* ================================================================
+ * Type3 tunnel transport (t3_client_*) + length-delimited framing
+ * ================================================================ */
+
+/* Definitive TCP-EOF probe. t3_client_pump does NOT flip state on a peer FIN,
+ * so a half-closed server leaves the fd permanently readable; without this a
+ * pump/read loop would spin. MSG_PEEK does not consume, and only a 0 return is
+ * a definitive EOF (>0 = data/partial record, <0 = EAGAIN/not-yet-connected). */
+static int fd_peer_closed(int fd) {
+    char probe;
+    int pk = recv(fd, &probe, 1, SHIM_MSG_PEEK_NB);
+    return pk == 0;
+}
+
+/* Drive the client state machine to READY (or fail) within timeout_ms.
+ * Returns 0 on READY, -1 on error/timeout. */
+static int tunnel_wait_ready(t3_client_stream *st, int timeout_ms) {
+    int fd = t3_client_get_fd(st);
+    int64_t deadline = now_ms() + timeout_ms;
+    for (;;) {
+        t3_client_pump(st);
+        t3_client_state_t s = t3_client_get_state(st);
+        if (s == T3_CLIENT_STATE_READY) return 0;
+        if (s == T3_CLIENT_STATE_ERROR || s == T3_CLIENT_STATE_CLOSED) return -1;
+        if (s != T3_CLIENT_STATE_CONNECTING && fd_peer_closed(fd)) return -1;
+        int64_t remaining = deadline - now_ms();
+        if (remaining <= 0) return -1;
+        struct pollfd pfd = { .fd = fd, .events = POLLIN | POLLOUT };
+        int pr = SHIM_POLL(&pfd, 1, remaining > 200 ? 200 : (int)remaining);
+        if (pr < 0) { if (shim_sock_intr()) continue; return -1; }
+    }
+}
+
+/* Wrap `len` bytes with a 2-byte LE length prefix and write one tunnel message.
+ * Returns 0 on success, -1 on error. len must be in [1, SHIM_BUF]. */
+static int tunnel_send(t3_client_stream *st, const uint8_t *data, size_t len) {
+    if (len == 0 || len > SHIM_BUF) return -1;
+    uint8_t framed[2 + SHIM_BUF];
+    framed[0] = (uint8_t)(len & 0xFF);
+    framed[1] = (uint8_t)((len >> 8) & 0xFF);
+    memcpy(framed + 2, data, len);
+    if (t3_client_write(st, framed, len + 2) != T3_OK) return -1;
+    t3_client_pump(st);  /* flush queued bytes toward the wire */
+    return 0;
+}
+
+/* Read exactly one length-delimited tunnel message into out (cap bytes).
+ * Returns payload length (>0) on success, 0 on timeout/no-data, -1 on
+ * error/close. timeout_ms == 0 is a single non-blocking poll-drain attempt. */
+static int tunnel_recv(t3_client_stream *st, uint8_t *out, size_t cap, int timeout_ms) {
+    int fd = t3_client_get_fd(st);
+    int64_t deadline = now_ms() + timeout_ms;
+    uint8_t msg[2 + SHIM_BUF + 16];  /* inner len + payload + up to 15B padding */
+    for (;;) {
+        t3_client_pump(st);
+        size_t got = 0;
+        t3_result_t rc = t3_client_read(st, msg, sizeof(msg), &got);
+        if (rc == T3_OK) {
+            if (got < 2) return -1;
+            size_t inner = (size_t)msg[0] | ((size_t)msg[1] << 8);
+            if (inner > got - 2 || inner > cap) return -1;
+            memcpy(out, msg + 2, inner);
+            return (int)inner;
+        }
+        if (rc != T3_ERR_BUF_TOO_SMALL) return -1;
+        t3_client_state_t s = t3_client_get_state(st);
+        if (s == T3_CLIENT_STATE_ERROR || s == T3_CLIENT_STATE_CLOSED) return -1;
+        if (fd_peer_closed(fd)) return -1;  /* peer FIN — pump won't surface it */
+        int64_t remaining = deadline - now_ms();
+        if (remaining <= 0) return 0;
+        struct pollfd pfd = { .fd = fd, .events = POLLIN };
+        int pr = SHIM_POLL(&pfd, 1, remaining > 200 ? 200 : (int)remaining);
+        if (pr < 0) { if (shim_sock_intr()) continue; return -1; }
+    }
 }
 
 /* ================================================================
@@ -458,34 +297,35 @@ struct t3_shim {
     uint16_t local_port;
     char     server_host[256];
     uint16_t server_port;
-    char     ws_path[512];
+    char     ws_path[512];   /* URL path (legacy name); carried into the https:// URL */
     uint8_t  secret_key[16];
     /* D6: auto-generated SOCKS5 USER/PASS that gate the loopback listener.
      * 32 lower-case hex digits each + NUL. Generated once at t3_shim_open
      * and never rotated. NOT to be logged or persisted. */
     char     user[T3_SHIM_CRED_BUFLEN];
     char     pass[T3_SHIM_CRED_BUFLEN];
-    SSL_CTX *ssl_ctx;
-    pthread_t       accept_thread;
-    atomic_bool     stopping;
-    atomic_int      active_tunnels;
-    atomic_uint_least64_t bytes_up;
-    atomic_uint_least64_t bytes_down;
+    shim_thread_t   accept_thread;
+    shim_atomic_i32 stopping;
+    shim_atomic_i32 active_tunnels;
+    shim_atomic_i64 bytes_up;
+    shim_atomic_i64 bytes_down;
 };
 
 /* ================================================================
  * Tunnel thread
  * ================================================================ */
 
-static void *tunnel_thread(void *arg) {
+SHIM_THREAD_FN(tunnel_thread, arg) {
     tunnel_arg_t *ta = arg;
     struct t3_shim *sh = ta->shim;
     int cfd = ta->client_fd;
     free(ta);
 
+    t3_client_stream *st = NULL;
+    int counted = 0;   /* whether active_tunnels was incremented */
     uint8_t buf[512];
 
-    /* --- SOCKS5 greeting from tgcalls (D6: require USERNAME/PASSWORD) --- */
+    /* --- SOCKS5 greeting from the local client (D6: require USERNAME/PASSWORD) --- */
     if (read_exact(cfd, buf, 2) < 0 || buf[0] != 0x05) goto done;
     uint8_t nmeth = buf[1];
     if (nmeth > 0 && read_exact(cfd, buf, nmeth) < 0) goto done;
@@ -499,12 +339,12 @@ static void *tunnel_thread(void *arg) {
     }
     if (!has_userpass) {
         uint8_t no_method[2] = {0x05, 0xFF};
-        send(cfd, no_method, 2, 0);
+        send(cfd, (const char *)no_method, 2, 0);
         goto done;
     }
     {
         uint8_t method_reply[2] = {0x05, 0x02};
-        send(cfd, method_reply, 2, 0);
+        send(cfd, (const char *)method_reply, 2, 0);
     }
 
     /* RFC 1929 sub-negotiation: 0x01 ULEN [UNAME] PLEN [PASSWD]
@@ -532,7 +372,7 @@ static void *tunnel_thread(void *arg) {
             && (CRYPTO_memcmp(pass_recv, sh->pass, T3_SHIM_CRED_LEN) == 0);
 
         uint8_t auth_reply[2] = { 0x01, (user_ok && pass_ok) ? 0x00 : 0xFF };
-        send(cfd, auth_reply, 2, 0);
+        send(cfd, (const char *)auth_reply, 2, 0);
         if (!user_ok || !pass_ok) goto done;
     }
 
@@ -540,9 +380,8 @@ static void *tunnel_thread(void *arg) {
     if (read_exact(cfd, buf, 4) < 0) goto done;
     if (buf[0] != 0x05) goto done;
     if (buf[1] != 0x01) {
-        /* BIND or UDP-ASSOCIATE: return REP=0x07 */
-        uint8_t r[10] = {0x05,0x07,0x00,0x01,0,0,0,0,0,0};
-        send(cfd, r, 10, 0);
+        /* BIND or UDP-ASSOCIATE: REP=0x07 (command not supported). */
+        socks5_reply(cfd, 0x07);
         goto done;
     }
     uint8_t atyp = buf[3];
@@ -562,26 +401,39 @@ static void *tunnel_thread(void *arg) {
     if (read_exact(cfd, dst_addr, alen) < 0) goto done;
     if (read_exact(cfd, dst_port, 2) < 0) goto done;
 
+    /* --- Open the Type3 tunnel to the server (HTTP-stream via t3_client_*) --- */
     {
-        /* --- Connect to Type3 server --- */
-        SSL *ssl = tls_connect_host(sh->ssl_ctx, sh->server_host, sh->server_port);
-        if (!ssl) {
-            uint8_t r[10] = {0x05,0x04,0x00,0x01,0,0,0,0,0,0};
-            send(cfd, r, 10, 0);
+        char url[1024];
+        int un = snprintf(url, sizeof(url), "https://%s:%u%s",
+                          sh->server_host, (unsigned)sh->server_port, sh->ws_path);
+        if (un < 0 || (size_t)un >= sizeof(url)) {
+            socks5_reply(cfd, 0x01);  /* general failure */
             goto done;
         }
-        if (ws_do_upgrade(ssl, sh->server_host, sh->ws_path) < 0) goto cleanup_ssl;
+        if (t3_client_create_tunnel(url, sh->secret_key, &st) != T3_OK || !st) {
+            socks5_reply(cfd, 0x04);  /* host unreachable */
+            st = NULL;
+            goto done;
+        }
+        if (tunnel_wait_ready(st, TUNNEL_CONNECT_TIMEOUT_MS) < 0) {
+            socks5_reply(cfd, 0x04);
+            goto done;
+        }
+    }
 
-        t3c_t c;
-        if (t3_open(ssl, sh->secret_key, &c) < 0) goto cleanup_ssl;
-
-        /* --- SOCKS5 tunnel to server: NO-AUTH greeting --- */
+    /* --- Inner SOCKS5 handshake with the Type3 server (through the tunnel) --- */
+    {
+        /* NO-AUTH greeting to the server end of the tunnel. */
         uint8_t greet[3] = {0x05, 0x01, 0x00};
-        if (t3_send(&c, greet, 3) < 0) goto cleanup_t3;
+        if (tunnel_send(st, greet, 3) < 0) { socks5_reply(cfd, 0x04); goto done; }
         uint8_t sr[2];
-        if (t3_recv(&c, sr, 2) != 2 || sr[0] != 0x05 || sr[1] != 0x00) goto cleanup_t3;
+        if (tunnel_recv(st, sr, sizeof(sr), TUNNEL_HANDSHAKE_TIMEOUT_MS) != 2
+            || sr[0] != 0x05 || sr[1] != 0x00) {
+            socks5_reply(cfd, 0x04);
+            goto done;
+        }
 
-        /* --- SOCKS5 CONNECT to original target --- */
+        /* Forward the original CONNECT target to the server. */
         uint8_t creq[4 + 1 + 255 + 2];
         int creq_len = 0;
         creq[creq_len++] = 0x05;
@@ -591,91 +443,119 @@ static void *tunnel_thread(void *arg) {
         if (atyp == 0x03) creq[creq_len++] = (uint8_t)alen;
         memcpy(creq + creq_len, dst_addr, (size_t)alen); creq_len += alen;
         memcpy(creq + creq_len, dst_port, 2);            creq_len += 2;
-        if (t3_send(&c, creq, creq_len) < 0) goto cleanup_t3;
-
-        /* Read SOCKS5 response (variable length, at least 10 bytes for IPv4) */
-        uint8_t sresp[256];
-        int rn = t3_recv(&c, sresp, sizeof(sresp));
-        if (rn < 4 || sresp[1] != 0x00) goto cleanup_t3;
-
-        /* --- Reply SOCKS5 success to tgcalls --- */
-        uint8_t ok[10] = {0x05,0x00,0x00,0x01,0,0,0,0,0,0};
-        send(cfd, ok, 10, 0);
-
-        atomic_fetch_add(&sh->active_tunnels, 1);
-
-        /* --- Bidirectional splice loop --- */
-        uint8_t fbuf[SHIM_BUF], tbuf[SHIM_BUF];
-        struct pollfd fds[2];
-        fds[0].fd = cfd;              fds[0].events = POLLIN;
-        fds[1].fd = SSL_get_fd(ssl);  fds[1].events = POLLIN;
-
-        for (;;) {
-            /* P4: cooperate with t3_shim_close shutdown — break out of splice
-             * so the drain in t3_shim_close completes within bounded time. */
-            if (atomic_load(&sh->stopping)) break;
-            int pret = poll(fds, 2, 5000);
-            if (pret < 0 && errno == EINTR) continue;
-            if (pret < 0) break;
-            if (fds[0].revents & (POLLHUP | POLLERR)) break;
-            if (fds[1].revents & (POLLHUP | POLLERR)) break;
-
-            if (fds[0].revents & POLLIN) {
-                ssize_t n = recv(cfd, fbuf, sizeof(fbuf), 0);
-                if (n <= 0) break;
-                if (t3_send(&c, fbuf, (int)n) < 0) break;
-                atomic_fetch_add(&sh->bytes_up, (uint_least64_t)n);
-            }
-            if (fds[1].revents & POLLIN) {
-                int n = t3_recv(&c, tbuf, sizeof(tbuf));
-                if (n <= 0) break;
-                if (send(cfd, tbuf, (size_t)n, 0) < 0) break;
-                atomic_fetch_add(&sh->bytes_down, (uint_least64_t)n);
-            }
+        if (tunnel_send(st, creq, (size_t)creq_len) < 0) {
+            socks5_reply(cfd, 0x04);
+            goto done;
         }
 
-        atomic_fetch_sub(&sh->active_tunnels, 1);
-cleanup_t3:
-        t3_close(&c);
-cleanup_ssl:
-        SSL_shutdown(ssl);
-        int sfd = SSL_get_fd(ssl);
-        SSL_free(ssl);
-        close(sfd);
+        uint8_t sresp[256];
+        int rn = tunnel_recv(st, sresp, sizeof(sresp), TUNNEL_HANDSHAKE_TIMEOUT_MS);
+        if (rn < 4 || sresp[1] != 0x00) {
+            socks5_reply(cfd, 0x05);  /* connection refused by upstream */
+            goto done;
+        }
     }
+
+    /* --- Reply SOCKS5 success to the local client --- */
+    socks5_reply(cfd, 0x00);
+    SHIM_A_ADD(&sh->active_tunnels, 1);
+    counted = 1;
+
+    /* --- Bidirectional splice loop --- */
+    {
+        int sfd = t3_client_get_fd(st);
+        uint8_t fbuf[SHIM_BUF];
+        struct pollfd fds[2];
+        fds[0].fd = cfd;  fds[0].events = POLLIN;
+        fds[1].fd = sfd;  fds[1].events = POLLIN;
+
+        for (;;) {
+            /* Cooperate with t3_shim_close shutdown so the close drain
+             * completes within bounded time. */
+            if (SHIM_A_LOAD(&sh->stopping)) break;
+
+            int pret = SHIM_POLL(fds, 2, 1000);
+            if (pret < 0) { if (shim_sock_intr()) continue; break; }
+
+            /* Always pump: flush queued writes + ingest server data. */
+            t3_client_pump(st);
+            t3_client_state_t s = t3_client_get_state(st);
+            if (s == T3_CLIENT_STATE_ERROR || s == T3_CLIENT_STATE_CLOSED) break;
+
+            /* Drain tunnel -> local client (one length-delimited message at a time). */
+            int drained_err = 0;
+            for (;;) {
+                uint8_t tbuf[SHIM_BUF];
+                int n = tunnel_recv(st, tbuf, sizeof(tbuf), 0);
+                if (n < 0) { drained_err = 1; break; }
+                if (n == 0) break;
+                if (send_all(cfd, tbuf, (size_t)n) < 0) { drained_err = 1; break; }
+                SHIM_A_ADD64(&sh->bytes_down, n);
+            }
+            if (drained_err) break;
+
+            /* Detect a peer FIN on the tunnel fd (pump does not surface EOF, so
+             * a half-closed server would otherwise keep the fd readable and
+             * spin the loop). */
+            if ((fds[1].revents & POLLIN) && fd_peer_closed(sfd)) break;
+            if (fds[1].revents & (POLLHUP | POLLERR)) break;
+
+            /* Local client -> tunnel. */
+            if (fds[0].revents & POLLIN) {
+                int n = recv(cfd, (char *)fbuf, (int)sizeof(fbuf), 0);
+                if (n <= 0) break;
+                if (tunnel_send(st, fbuf, (size_t)n) < 0) break;
+                SHIM_A_ADD64(&sh->bytes_up, n);
+            }
+            if (fds[0].revents & (POLLHUP | POLLERR)) break;
+        }
+    }
+
 done:
-    close(cfd);
-    return NULL;
+    if (counted) SHIM_A_ADD(&sh->active_tunnels, -1);
+    if (st) t3_client_destroy(st);
+    SHIM_CLOSESOCKET(cfd);
+    SHIM_THREAD_RETURN;
 }
 
 /* ================================================================
  * Accept thread
  * ================================================================ */
 
-static void *accept_thread(void *arg) {
+SHIM_THREAD_FN(accept_thread, arg) {
     struct t3_shim *sh = arg;
-    while (!atomic_load(&sh->stopping)) {
+    while (!SHIM_A_LOAD(&sh->stopping)) {
+        /* Poll the (non-blocking) listener with a short tick so we re-check
+         * `stopping` and exit promptly on t3_shim_close. Do NOT rely on
+         * close(listen_fd) waking a blocked accept(): that wakes accept on
+         * BSD/macOS but is a no-op on Linux, where it would otherwise hang the
+         * accept-thread join in t3_shim_close forever. */
+        struct pollfd pfd = { .fd = sh->listen_fd, .events = POLLIN };
+        int pr = SHIM_POLL(&pfd, 1, 500);
+        if (pr <= 0) continue;  /* timeout / error -> re-check stopping */
+
         struct sockaddr_storage sa;
-        socklen_t slen = sizeof(sa);
-        int cfd = accept(sh->listen_fd, (struct sockaddr *)&sa, &slen);
-        if (cfd < 0) {
-            if (errno == EINTR || errno == EAGAIN) continue;
-            break;
-        }
+        socklen_t slen = (socklen_t)sizeof(sa);
+        int cfd = (int)accept(sh->listen_fd, (struct sockaddr *)&sa, &slen);
+        if (cfd < 0) continue;  /* EAGAIN / aborted connection -> retry */
+        /* The listener is non-blocking; force the accepted socket BLOCKING so
+         * the synchronous SOCKS5 handshake (read_exact) works on every platform
+         * (Windows accepts inherit the listener's non-blocking mode). */
+        shim_sock_set_nonblock(cfd, 0);
         int one = 1;
-        setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+        setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, (const char *)&one, sizeof(one));
         tunnel_arg_t *ta = malloc(sizeof(*ta));
-        if (!ta) { close(cfd); continue; }
+        if (!ta) { SHIM_CLOSESOCKET(cfd); continue; }
         ta->shim = sh;
         ta->client_fd = cfd;
-        pthread_t tid;
-        if (pthread_create(&tid, NULL, tunnel_thread, ta) != 0) {
-            close(cfd); free(ta);
+        shim_thread_t tid;
+        if (shim_thread_create(&tid, tunnel_thread, ta) != 0) {
+            SHIM_CLOSESOCKET(cfd); free(ta);
         } else {
-            pthread_detach(tid);
+            shim_thread_detach(tid);
         }
     }
-    return NULL;
+    SHIM_THREAD_RETURN;
 }
 
 /* ================================================================
@@ -727,33 +607,33 @@ T3_API t3_result_t t3_shim_open(
         sh->pass[T3_SHIM_CRED_LEN] = '\0';
     }
 
-    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
-    if (!ctx) { free(sh); return T3_ERR_INTERNAL; }  /* P2 */
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
-    SSL_CTX_set_default_verify_paths(ctx);
-    sh->ssl_ctx = ctx;
-
-    sh->listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sh->listen_fd < 0) { SSL_CTX_free(ctx); free(sh); return T3_ERR_INTERNAL; }
+    if (shim_sock_startup() != 0) { free(sh); return T3_ERR_INTERNAL; }  /* WSAStartup on Windows */
+    sh->listen_fd = (int)socket(AF_INET, SOCK_STREAM, 0);
+    if (sh->listen_fd < 0) { free(sh); return T3_ERR_INTERNAL; }
     int reuse = 1;
-    setsockopt(sh->listen_fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    setsockopt(sh->listen_fd, SOL_SOCKET, SO_REUSEADDR, (const char *)&reuse, sizeof(reuse));
     struct sockaddr_in la = {0};
     la.sin_family = AF_INET;
     la.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     la.sin_port = htons(local_port);
-    if (bind(sh->listen_fd, (struct sockaddr *)&la, sizeof(la)) < 0 ||
+    if (bind(sh->listen_fd, (struct sockaddr *)&la, (socklen_t)sizeof(la)) < 0 ||
         listen(sh->listen_fd, 16) < 0) {
-        close(sh->listen_fd); SSL_CTX_free(ctx); free(sh);
+        SHIM_CLOSESOCKET(sh->listen_fd); free(sh);
         return T3_ERR_INTERNAL;
     }
-    socklen_t llen = sizeof(la);
+    socklen_t llen = (socklen_t)sizeof(la);
     getsockname(sh->listen_fd, (struct sockaddr *)&la, &llen);
     sh->local_port = ntohs(la.sin_port);
 
-    atomic_store(&sh->stopping, 0);
-    if (pthread_create(&sh->accept_thread, NULL, accept_thread, sh) != 0) {
+    /* Non-blocking listener: the accept thread poll()s it with a timeout so it
+     * observes `stopping` and exits cleanly without relying on close() waking a
+     * blocked accept() (a Linux no-op). See accept_thread. */
+    shim_sock_set_nonblock(sh->listen_fd, 1);
+
+    SHIM_A_STORE(&sh->stopping, 0);
+    if (shim_thread_create(&sh->accept_thread, accept_thread, sh) != 0) {
         /* P11: unwind on accept_thread spawn failure */
-        close(sh->listen_fd); SSL_CTX_free(ctx); free(sh);
+        SHIM_CLOSESOCKET(sh->listen_fd); free(sh);
         return T3_ERR_INTERNAL;
     }
     *out = sh;
@@ -762,24 +642,23 @@ T3_API t3_result_t t3_shim_open(
 
 T3_API void t3_shim_close(t3_shim_t *sh) {
     if (!sh) return;
-    atomic_store(&sh->stopping, 1);
-    close(sh->listen_fd);
-    pthread_join(sh->accept_thread, NULL);
+    SHIM_A_STORE(&sh->stopping, 1);
+    SHIM_CLOSESOCKET(sh->listen_fd);
+    shim_thread_join(sh->accept_thread);
 
     /* P4: bounded-wait drain — detached tunnel threads must observe the
-     * stopping flag and exit before we free the SSL_CTX they're still using.
-     * Wait up to ~10s in 50ms ticks. If tunnels still haven't drained, leak
-     * the shim rather than free-and-UAF the SSL_CTX out from under them. */
-    for (int i = 0; i < 200; i++) {
-        if (atomic_load(&sh->active_tunnels) == 0) break;
-        struct timespec ts = { .tv_sec = 0, .tv_nsec = 50 * 1000 * 1000 };
-        nanosleep(&ts, NULL);
+     * stopping flag and exit before we free the shim they reference. Wait up
+     * to ~4s in 50ms ticks (short enough to fit a typical caller shutdown wait;
+     * tunnels notice `stopping` within one ~1s splice tick). If tunnels still
+     * haven't drained, leak the shim rather than free-and-UAF it. */
+    for (int i = 0; i < 80; i++) {
+        if (SHIM_A_LOAD(&sh->active_tunnels) == 0) break;
+        shim_sleep_ms(50);
     }
-    if (atomic_load(&sh->active_tunnels) != 0) {
+    if (SHIM_A_LOAD(&sh->active_tunnels) != 0) {
         return;  /* leak rather than UAF */
     }
 
-    SSL_CTX_free(sh->ssl_ctx);
     free(sh);
 }
 
@@ -810,7 +689,7 @@ T3_API void t3_shim_stats(const t3_shim_t *sh,
         if (out_down)   *out_down = 0;
         return;
     }
-    if (out_active) *out_active = (int32_t)atomic_load(&sh->active_tunnels);
-    if (out_up)     *out_up     = (uint64_t)atomic_load(&sh->bytes_up);
-    if (out_down)   *out_down   = (uint64_t)atomic_load(&sh->bytes_down);
+    if (out_active) *out_active = (int32_t)SHIM_A_LOAD(&sh->active_tunnels);
+    if (out_up)     *out_up     = (uint64_t)SHIM_A_LOAD64(&sh->bytes_up);
+    if (out_down)   *out_down   = (uint64_t)SHIM_A_LOAD64(&sh->bytes_down);
 }

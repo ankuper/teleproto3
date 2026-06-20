@@ -31,10 +31,14 @@ static void sha256_hash(const void *data, size_t len, unsigned char out[32]) {
 
 /* ── obfs2 init generation (client side) ────────────────────────────── */
 
-int t3c_obfs2_generate_init(const uint8_t secret[16], int16_t dc_id,
-                            uint8_t header_out[64],
-                            t3c_aes_ctx *encrypt_ctx,
-                            t3c_aes_ctx *decrypt_ctx) {
+/* Common generator. When tunnel != 0 the dc_id slot at header[60:62] is
+ * stamped with the SOCKS5-tunnel sentinel 0x5353 instead of a target DC; the
+ * canonical padded-intermediate tag 0xdddddddd at [56:60] is unchanged either
+ * way (story 9.2 AC1). dc_id is ignored when tunnel != 0. */
+static int gen_obfs2_init(const uint8_t secret[16], int16_t dc_id, int tunnel,
+                          uint8_t header_out[64],
+                          t3c_aes_ctx *encrypt_ctx,
+                          t3c_aes_ctx *decrypt_ctx) {
     uint8_t header[64];
 
     /* Generate 64 random bytes, avoiding reserved prefixes */
@@ -62,8 +66,16 @@ int t3c_obfs2_generate_init(const uint8_t secret[16], int16_t dc_id,
     header[3] = 0x00;
     /* Set transport tag: padded intermediate (0xdddddddd) at offset 56 */
     *(uint32_t *)(header + 56) = 0xdddddddd;
-    /* Set target DC at offset 60 */
-    *(int16_t *)(header + 60) = dc_id;
+    /* Set DC slot at offset 60: either the target DC, or — for SOCKS5-tunnel
+     * mode — the sentinel 0x5353 (out of the valid DC range; the server
+     * dispatches on it, story 9.4). Written as two explicit bytes 0x53 0x53 so
+     * the wire value is endian-independent. */
+    if (tunnel) {
+        header[60] = 0x53;
+        header[61] = 0x53;
+    } else {
+        *(int16_t *)(header + 60) = dc_id;
+    }
 
     /* ── Derive client write key (= server read key) ─────────────── */
     /* write_key = SHA256(header[8:40] + secret) */
@@ -128,6 +140,23 @@ int t3c_obfs2_generate_init(const uint8_t secret[16], int16_t dc_id,
     EVP_CIPHER_CTX_set_padding(decrypt_ctx->ctx, 0);
 
     return 0;
+}
+
+/* Public: normal (DC-routed) obfs2 init. */
+int t3c_obfs2_generate_init(const uint8_t secret[16], int16_t dc_id,
+                            uint8_t header_out[64],
+                            t3c_aes_ctx *encrypt_ctx,
+                            t3c_aes_ctx *decrypt_ctx) {
+    return gen_obfs2_init(secret, dc_id, 0, header_out, encrypt_ctx, decrypt_ctx);
+}
+
+/* Public: SOCKS5-tunnel obfs2 init — stamps the 0x5353 sentinel in place of
+ * dc_id, keeps the canonical 0xdddddddd tag (story 9.2 AC1). */
+int t3c_obfs2_generate_init_tunnel(const uint8_t secret[16],
+                                   uint8_t header_out[64],
+                                   t3c_aes_ctx *encrypt_ctx,
+                                   t3c_aes_ctx *decrypt_ctx) {
+    return gen_obfs2_init(secret, 0, 1, header_out, encrypt_ctx, decrypt_ctx);
 }
 
 /* ── AES-CTR encrypt/decrypt (in-place safe) ────────────────────────── */

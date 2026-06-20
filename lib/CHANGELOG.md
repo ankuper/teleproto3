@@ -6,11 +6,41 @@ declares the `spec-vX.Y.Z` range it implements — see `VERSION`.
 
 ## [Unreleased]
 
+## [lib-v0.8.0] — 2026-06-20
+
 ### Added
+- `t3_client_create_tunnel()` — open a SOCKS5-tunnel client stream whose obfs2
+  init stamps the SOCKS5-tunnel sentinel `0x5353` at `header[60:62]` (in place
+  of a dc_id) while keeping the canonical padded-intermediate tag `0xdddddddd`
+  at `[56:60]`. The tunnel rides the standard `t3_client_*` HTTP-stream
+  transport, so it is shape-indistinguishable from a chat stream and inherits
+  padding shaping. A tag-agnostic server dispatches on the sentinel
+  (Story 9.2 AC1). Declared in `t3_client.h`.
 - `t3_shim_get_credentials()` — retrieve the auto-generated SOCKS5
   USERNAME/PASSWORD that the shim enforces on its loopback listener
   (Story 9-1 D6). New constants `T3_SHIM_CRED_LEN` (32) and
   `T3_SHIM_CRED_BUFLEN` (33) declared in `t3_shim_socks5.h`.
+
+### Changed
+- The SOCKS5 shim (`T3_SHIM_SOCKS5`) is re-based onto the canonical
+  `t3_client_*` HTTP-stream transport: the hand-rolled WebSocket upgrade,
+  own-TLS and own-crypto are deleted — there is no WS upgrade and no WS frame
+  on the wire (the WS upgrade was the TSPU/DPI fingerprint the project
+  eliminated for chats). The SOCKS5 byte stream is carried as length-delimited
+  messages (2-byte LE inner length) so it is byte-exact end to end while
+  inheriting transport padding (Story 9.2 AC2).
+- The SOCKS5 shim is now portable to Windows (winsock2 + Win32 threads),
+  in addition to Linux/macOS/Android.
+
+### Release / build
+- `build-lib.yml` builds the linux/macOS/windows artifacts with
+  `-DT3_SHIM_SOCKS5=ON`, ships `t3_shim_socks5.h`, and advertises
+  `T3_SHIM_SOCKS5_AVAILABLE=1` in the shipped `t3_features.h` so downstream
+  desktop clients consume the shim from the release (Story 9.2 AC3/AC5).
+
+### Stability note
+ABI additive — new `t3_client_create_tunnel` symbol; no existing function
+signature or enumerant changed.
 
 ## [lib-v0.7.0] — 2026-06-17
 

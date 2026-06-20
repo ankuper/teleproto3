@@ -27,11 +27,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install deps
-        run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev zlib1g-dev
+        run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev zlib1g-dev python3-pytest python3-cryptography
 
       - name: Build libteleproto3
         run: |
-          cmake -S lib -B lib/build -DCMAKE_BUILD_TYPE=Release -DT3_BUILD_CLIENT=ON
+          cmake -S lib -B lib/build -DCMAKE_BUILD_TYPE=Release -DT3_BUILD_CLIENT=ON -DT3_SHIM_SOCKS5=ON
           cmake --build lib/build -j$(nproc)
 
       - name: Run tests
@@ -46,10 +46,20 @@ jobs:
           # root and points LIBTELEPROTO3_ROOT at it — no source clone needed.
           mkdir -p dist/lib/include
           cp lib/build/libteleproto3.a dist/lib/
-          cp lib/include/t3.h lib/include/t3_client.h lib/include/t3_features.h dist/lib/include/
+          cp lib/include/t3.h lib/include/t3_client.h lib/include/t3_shim_socks5.h dist/lib/include/
+          # This build enabled T3_SHIM_SOCKS5; bake the availability flag into the
+          # shipped feature header so prebuilt-artifact consumers (raw -I, no CMake
+          # target) see T3_SHIM_SOCKS5_AVAILABLE=1 without a compile-time -D.
+          sed 's/T3_SHIM_SOCKS5_AVAILABLE 0/T3_SHIM_SOCKS5_AVAILABLE 1/' lib/include/t3_features.h > dist/lib/include/t3_features.h
           cp -R spec dist/spec
           tar czf libteleproto3-linux-${ARCH}.tar.gz -C dist .
           echo "ASSET=libteleproto3-linux-${ARCH}.tar.gz" >> $GITHUB_ENV
+
+      - name: Verify shim shipped in artifact (story 9.2 AC3)
+        run: |
+          T3_LIB_A=lib/build/libteleproto3.a \
+          T3_FEATURES=dist/lib/include/t3_features.h \
+            bash lib/tests/abi/shim_release_symbols_test.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -74,7 +84,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install deps
-        run: brew install cmake openssl@3
+        run: |
+          brew install cmake openssl@3
+          # pytest + cryptography power the SOCKS5 shim conformance/byte-shape
+          # suites. Best-effort: the CMake registration skips them if absent, so
+          # a pip hiccup never reds the release build (the C suites + symbol
+          # check still gate).
+          python3 -m pip install --break-system-packages -q pytest cryptography || true
 
       - name: Build libteleproto3
         run: |
@@ -90,6 +106,7 @@ jobs:
           cmake -S lib -B lib/build \
             -DCMAKE_BUILD_TYPE=Release \
             -DT3_BUILD_CLIENT=ON \
+            -DT3_SHIM_SOCKS5=ON \
             -DOPENSSL_ROOT_DIR="$OPENSSL_ROOT" \
             ${{ matrix.cmake_arch_flags }} \
             $TESTS_FLAG
@@ -104,10 +121,20 @@ jobs:
           ARCH=${{ matrix.arch }}
           mkdir -p dist/lib/include
           cp lib/build/libteleproto3.a dist/lib/
-          cp lib/include/t3.h lib/include/t3_client.h lib/include/t3_features.h dist/lib/include/
+          cp lib/include/t3.h lib/include/t3_client.h lib/include/t3_shim_socks5.h dist/lib/include/
+          # This build enabled T3_SHIM_SOCKS5; bake the availability flag into the
+          # shipped feature header so prebuilt-artifact consumers (raw -I, no CMake
+          # target) see T3_SHIM_SOCKS5_AVAILABLE=1 without a compile-time -D.
+          sed 's/T3_SHIM_SOCKS5_AVAILABLE 0/T3_SHIM_SOCKS5_AVAILABLE 1/' lib/include/t3_features.h > dist/lib/include/t3_features.h
           cp -R spec dist/spec
           tar czf libteleproto3-macos-${ARCH}.tar.gz -C dist .
           echo "ASSET=libteleproto3-macos-${ARCH}.tar.gz" >> $GITHUB_ENV
+
+      - name: Verify shim shipped in artifact (story 9.2 AC3)
+        run: |
+          T3_LIB_A=lib/build/libteleproto3.a \
+          T3_FEATURES=dist/lib/include/t3_features.h \
+            bash lib/tests/abi/shim_release_symbols_test.sh
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -154,6 +181,7 @@ jobs:
           cmake -B build -G "Ninja" ^
             -DCMAKE_BUILD_TYPE=Release ^
             -DT3_BUILD_CLIENT=ON ^
+            -DT3_SHIM_SOCKS5=ON ^
             -DT3_BUILD_TESTS=OFF ^
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
             -DOPENSSL_ROOT_DIR="%OPENSSL_ROOT_DIR%"
@@ -164,9 +192,23 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist\lib\include | Out-Null
           Copy-Item lib\build\teleproto3.lib dist\lib\
-          Copy-Item lib\include\t3.h,lib\include\t3_client.h,lib\include\t3_features.h dist\lib\include\
+          Copy-Item lib\include\t3.h,lib\include\t3_client.h,lib\include\t3_shim_socks5.h dist\lib\include\
+          # This build enabled T3_SHIM_SOCKS5; bake the availability flag into the
+          # shipped feature header so raw -I consumers see =1 without a compile -D.
+          (Get-Content lib\include\t3_features.h) -replace 'T3_SHIM_SOCKS5_AVAILABLE 0','T3_SHIM_SOCKS5_AVAILABLE 1' | Set-Content dist\lib\include\t3_features.h
           Copy-Item -Recurse spec dist\spec
           Compress-Archive -Path dist\* -DestinationPath libteleproto3-windows-x86_64.zip -Force
+
+      - name: Verify shim shipped in artifact (story 9.2 AC3)
+        shell: pwsh
+        run: |
+          $h = Get-Content dist\lib\include\t3_features.h -Raw
+          if ($h -notmatch 'T3_SHIM_SOCKS5_AVAILABLE 1') { Write-Error 'feature flag not baked to 1'; exit 1 }
+          $syms = & dumpbin /SYMBOLS dist\lib\teleproto3.lib
+          foreach ($s in 't3_shim_open','t3_shim_close','t3_shim_get_credentials','t3_shim_local_port') {
+            if (-not ($syms -match "\b$s\b")) { Write-Error "symbol not exported: $s"; exit 1 }
+          }
+          Write-Host 'AC3 Windows: shim flag + t3_shim_* symbols present.'
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

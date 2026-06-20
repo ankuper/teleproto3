@@ -54,6 +54,12 @@ try:
 except ImportError:
     HAS_CRYPTOGRAPHY = False
 
+# Story 9.2: the shim now speaks the t3_client_* HTTP-stream transport, so the
+# mock server is the shared faithful HTTP-stream Type3 echo (no more WebSocket).
+# Imported only when cryptography is available so collection still skips cleanly.
+if HAS_CRYPTOGRAPHY:
+    from _t3_http_stream_mock import type3_http_handler
+
 _STUB_BIN = os.environ.get(
     "T3_SHIM_STUB_BIN",
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "build", "test_shim_stub"),
@@ -207,123 +213,15 @@ def tls_creds(tmp_path_factory):
 # Mock Type3 server
 # ---------------------------------------------------------------------------
 
-_WS_GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _TEST_SECRET_KEY = bytes(range(16))   # 16-byte secret key for tests
 _TEST_SECRET_HEX = "ff" + _TEST_SECRET_KEY.hex() + "127.0.0.1"
 
 
-def _ws_accept(key_b64: str) -> str:
-    accept = base64.b64encode(
-        hashlib.sha1(key_b64.encode() + _WS_GUID).digest()
-    ).decode()
-    return accept
-
-
-async def _handle_mock_type3(reader: asyncio.StreamReader,
-                              writer: asyncio.StreamWriter) -> None:
-    """Very basic Type3 server: accepts WS upgrade, reads handshake, acts as SOCKS5."""
-    # WebSocket upgrade
-    req = b""
-    while b"\r\n\r\n" not in req:
-        chunk = await reader.read(4096)
-        if not chunk:
-            return
-        req += chunk
-    ws_key = ""
-    for line in req.decode("ascii", errors="replace").split("\r\n"):
-        if line.lower().startswith("sec-websocket-key:"):
-            ws_key = line.split(":", 1)[1].strip()
-    resp = (
-        f"HTTP/1.1 101 Switching Protocols\r\n"
-        f"Upgrade: websocket\r\nConnection: Upgrade\r\n"
-        f"Sec-WebSocket-Accept: {_ws_accept(ws_key)}\r\n\r\n"
-    ).encode()
-    writer.write(resp)
-    await writer.drain()
-
-    # Read WS frame: random_header(64). The shim ships exactly 64 bytes (no
-    # session_header prefix — the teleproxy obfuscated2 wire protocol does not
-    # carry one; see shim_socks5.c:t3_open() comment).
-    hdr = await reader.readexactly(2)
-    length = hdr[1] & 0x7F
-    masked = bool(hdr[1] & 0x80)
-    if length == 126:
-        length = struct.unpack(">H", await reader.readexactly(2))[0]
-    mask_key = await reader.readexactly(4) if masked else b"\x00\x00\x00\x00"
-    payload = bytearray(await reader.readexactly(length))
-    if masked:
-        for i in range(len(payload)):
-            payload[i] ^= mask_key[i % 4]
-    if len(payload) < 64:
-        writer.close()
-        return
-
-    rh = bytes(payload[0:64])
-    sk = _TEST_SECRET_KEY
-
-    # Server-side key derivation (mirror of shim):
-    # Server reads with (enc_key, enc_iv) — same as shim's enc direction
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    enc_key = hashlib.sha256(rh[8:40] + sk).digest()
-    enc_iv  = rh[40:56]
-    dec_key = hashlib.sha256(rh[24:56][::-1] + sk).digest()
-    dec_iv  = rh[8:24][::-1]
-
-    # Server decrypts what client sends (client used enc_key + enc_iv, advanced past rh)
-    srv_dec = Cipher(algorithms.AES(enc_key), modes.CTR(enc_iv),
-                     backend=default_backend()).encryptor()
-    srv_dec.update(rh)  # advance past random_header (server already consumed these)
-
-    # Server encrypts what it sends (client decrypts with dec_key + dec_iv)
-    srv_enc = Cipher(algorithms.AES(dec_key), modes.CTR(dec_iv),
-                     backend=default_backend()).encryptor()
-
-    async def recv_plaintext() -> bytes:
-        h = await reader.readexactly(2)
-        ln = h[1] & 0x7F
-        is_masked = bool(h[1] & 0x80)
-        if ln == 126: ln = struct.unpack(">H", await reader.readexactly(2))[0]
-        mk = await reader.readexactly(4) if is_masked else b"\x00" * 4
-        enc = bytearray(await reader.readexactly(ln))
-        if is_masked:
-            for i in range(len(enc)): enc[i] ^= mk[i % 4]
-        return srv_dec.update(bytes(enc))
-
-    async def send_plaintext(data: bytes) -> None:
-        ct = srv_enc.update(data)
-        # RFC 6455 §5.1: server-to-client frames MUST NOT be masked.
-        if len(ct) < 126:
-            frame = bytes([0x82, len(ct)]) + ct
-        elif len(ct) <= 65535:
-            frame = bytes([0x82, 126, (len(ct) >> 8) & 0xFF, len(ct) & 0xFF]) + ct
-        else:
-            raise AssertionError(f"frame too large for test mock: {len(ct)}")
-        writer.write(frame)
-        await writer.drain()
-
-    # SOCKS5 greeting from shim
-    greet = await recv_plaintext()
-    if len(greet) < 2 or greet[0] != 0x05:
-        writer.close(); return
-    # Reply: NO-AUTH accepted
-    await send_plaintext(bytes([0x05, 0x00]))
-
-    # SOCKS5 CONNECT from shim
-    req_bytes = await recv_plaintext()
-    if len(req_bytes) < 4 or req_bytes[1] != 0x01:
-        writer.close(); return
-    # Reply: success (0.0.0.0:0)
-    await send_plaintext(bytes([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]))
-
-    # Relay mode: just consume/ignore data (test sink)
-    try:
-        while True:
-            data = await recv_plaintext()
-            if not data:
-                break
-    except Exception:
-        pass
-    writer.close()
+# The legacy WebSocket mock (_ws_accept / _handle_mock_type3) was removed in
+# story 9.2: the shim no longer speaks WebSocket. The mock_server fixture below
+# now uses the shared HTTP-stream Type3 echo (type3_http_handler), which decodes
+# the obfs2 init, decrypts the length-delimited tunnel stream, terminates the
+# inner SOCKS5 handshake, and echoes data back.
 
 
 @pytest.fixture(scope="session")
@@ -336,7 +234,7 @@ def mock_server(tls_creds):
         ssl_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ssl_ctx.load_cert_chain(cert_path, key_path)
         server = await asyncio.start_server(
-            _handle_mock_type3, host, port, ssl=ssl_ctx)
+            type3_http_handler(_TEST_SECRET_KEY), host, port, ssl=ssl_ctx)
         async with server:
             await server.serve_forever()
 

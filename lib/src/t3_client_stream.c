@@ -192,6 +192,7 @@ struct t3_client_stream {
 
     /* obfs2 */
     int                  obfs2_sent;
+    int                  tunnel_mode;  /* 1 = SOCKS5-tunnel sentinel init (story 9.2) */
 
     /* Error */
     char                 last_error[256];
@@ -335,6 +336,23 @@ T3_API t3_result_t t3_client_create(
     return T3_OK;
 }
 
+/* ── Create (SOCKS5-tunnel) ─────────────────────────────────────────────
+   Thin wrapper over t3_client_create: dc_id is irrelevant (the obfs2 init
+   stamps the 0x5353 sentinel instead), so we pass 0 and flip tunnel_mode
+   before the handshake runs. The init is generated later in pump()'s
+   HANDSHAKE state, so setting the flag here is in time. (story 9.2 AC1) */
+T3_API t3_result_t t3_client_create_tunnel(
+    const char *endpoint_url,
+    const uint8_t secret[16],
+    t3_client_stream **out)
+{
+    t3_result_t rc = t3_client_create(endpoint_url, secret, 0, out);
+    if (rc == T3_OK && out && *out) {
+        (*out)->tunnel_mode = 1;
+    }
+    return rc;
+}
+
 /* ── TLS pump ───────────────────────────────────────────────────────── */
 static int pump_tls_handshake(t3_client_stream *s) {
     int rc = SSL_do_handshake(s->ssl);
@@ -410,8 +428,12 @@ static int send_http_post_headers(t3_client_stream *s) {
 /* ── Send obfs2 init ────────────────────────────────────────────────── */
 static int send_obfs2_init(t3_client_stream *s) {
     uint8_t header[64];
-    if (t3c_obfs2_generate_init(s->secret, s->dc_id, header,
-                                 &s->encrypt_ctx, &s->decrypt_ctx) != 0) {
+    int gen_rc = s->tunnel_mode
+        ? t3c_obfs2_generate_init_tunnel(s->secret, header,
+                                         &s->encrypt_ctx, &s->decrypt_ctx)
+        : t3c_obfs2_generate_init(s->secret, s->dc_id, header,
+                                  &s->encrypt_ctx, &s->decrypt_ctx);
+    if (gen_rc != 0) {
         snprintf(s->last_error, sizeof(s->last_error), "obfs2 init generation failed");
         return -1;
     }
