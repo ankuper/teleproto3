@@ -259,6 +259,7 @@ build_slice() {
         -S "$LIB_DIR" \
         -B "$BUILD_DIR" \
         -DCMAKE_SYSTEM_NAME=iOS \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
         -DCMAKE_OSX_SYSROOT="$SDK" \
         -DCMAKE_OSX_ARCHITECTURES="$ARCHS" \
         -DCMAKE_BUILD_TYPE=Release \
@@ -328,6 +329,7 @@ cmake \
     -S "$LIB_DIR" \
     -B "$SIM_ARM64_BUILD" \
     -DCMAKE_SYSTEM_NAME=iOS \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
     -DCMAKE_OSX_SYSROOT=iphonesimulator \
     -DCMAKE_OSX_ARCHITECTURES=arm64 \
     -DCMAKE_BUILD_TYPE=Release \
@@ -348,6 +350,7 @@ cmake \
     -S "$LIB_DIR" \
     -B "$SIM_X86_BUILD" \
     -DCMAKE_SYSTEM_NAME=iOS \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
     -DCMAKE_OSX_SYSROOT=iphonesimulator \
     -DCMAKE_OSX_ARCHITECTURES=x86_64 \
     -DCMAKE_BUILD_TYPE=Release \
