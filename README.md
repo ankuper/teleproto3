@@ -1,3 +1,11 @@
+<!-- краткое RU-описание ниже · full English spec below -->
+
+> **Type3 / mtProxy3** — анти-DPI транспорт для Telegram: туннелирует MTProto через обычный HTTPS, обходя DPI/ТСПУ. Этот репозиторий — спецификация, референс-реализация (`libteleproto3`), сервер и conformance. Клиенты-форки: [tdesktop](https://github.com/ankuper/tdesktop) · [telegram-android](https://github.com/ankuper/telegram-android) · [telegram-ios](https://github.com/ankuper/telegram-ios). Полное техническое описание — ниже (EN).
+>
+> **Поддержать инфраструктуру (TON):** `UQAYS0k0PEky8BUE1Rij90v8-CmOWsuhAzdLTHOzYC-qZ0pV`
+
+---
+
 # teleproto3
 
 **Type3** (`mtProxy3`) is a censorship-resistant transport for [Telegram Messenger](https://telegram.org): it tunnels MTProto over HTTPS via HTTP POST with chunked transfer encoding, to bypass DPI-based blocking (ТСПУ-resistant). WebSocket upgrade mode is supported for legacy clients but deprecated.
