@@ -299,11 +299,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
 
-      - name: Upload to latest release
+      - name: Upload to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq .tag_name)
+          TAG="${GITHUB_REF##*/}"
+          # Create the release for this tag if it doesn't exist yet (iOS job may race us).
+          gh release create "$TAG" --title "$TAG" 2>/dev/null || true
           shopt -s nullglob
           for f in libteleproto3-*/libteleproto3-*.tar.gz libteleproto3-*/libteleproto3-*.zip; do
             NAME=$(basename "$f")

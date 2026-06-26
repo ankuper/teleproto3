@@ -2,7 +2,7 @@ name: Build iOS prebuilt
 
 on:
   push:
-    tags: ['v*.*.*']
+    tags: ['lib-v*']
   workflow_dispatch:
 
 permissions:
@@ -54,8 +54,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG=${GITHUB_REF##*/}
-          # Create release if it doesn't exist yet (no-op if already exists)
-          gh release create "$TAG" --title "$TAG" --prerelease 2>/dev/null || true
+          # Create release if it doesn't exist yet (lib job may race us).
+          gh release create "$TAG" --title "$TAG" 2>/dev/null || true
           gh release upload "$TAG" /tmp/t3-ios-out/libteleproto3-ios-arm64.tar.gz \
             --repo "${{ github.repository }}"
           gh release upload "$TAG" /tmp/t3-ios-out/libteleproto3-ios-simulator.tar.gz \
