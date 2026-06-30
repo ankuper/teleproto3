@@ -265,6 +265,7 @@ build_slice() {
         -DCMAKE_BUILD_TYPE=Release \
         -DT3_BUILD_CLIENT=ON \
         -DT3_BUILD_TESTS=OFF \
+        -DT3_SHIM_SOCKS5=ON \
         -DT3_CSPRNG_BACKEND=macos \
         -DT3_HARDENING=OFF \
         -DOPENSSL_INCLUDE_DIR="$INC_DIR" \

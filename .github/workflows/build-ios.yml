@@ -15,10 +15,35 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build iOS artifacts
+      - name: Sparse-checkout BoringSSL from Telegram-iOS
+        run: |
+          git clone \
+            --depth=1 \
+            --no-checkout \
+            https://github.com/ankuper/Telegram-iOS.git \
+            /tmp/tg-ios
+          cd /tmp/tg-ios
+          git sparse-checkout set third-party/boringssl
+          git checkout
+          [[ -f "third-party/boringssl/CMakeLists.txt" ]] || {
+            echo "error: third-party/boringssl/CMakeLists.txt not found" >&2
+            exit 1
+          }
+          echo "BoringSSL source OK"
+
+      - name: Build BoringSSL for iOS
+        run: |
+          chmod +x ci/build-boringssl-ios.sh
+          ci/build-boringssl-ios.sh \
+            --src /tmp/tg-ios/third-party/boringssl \
+            --out /tmp/boringssl-ios
+
+      - name: Build iOS artifacts (BoringSSL-linked)
         run: |
           chmod +x ci/build-ios.sh
-          ci/build-ios.sh --out /tmp/t3-ios-out
+          ci/build-ios.sh \
+            --openssl-root /tmp/boringssl-ios \
+            --out /tmp/t3-ios-out
 
       - name: Pack artifacts
         run: |
@@ -27,11 +52,17 @@ jobs:
           mkdir -p stage-device/lib
           cp device-arm64/libteleproto3.a stage-device/lib/
           cp -r device-arm64/include stage-device/lib/include
+          # Bake T3_SHIM_SOCKS5_AVAILABLE=1 into the shipped header so Bazel
+          # consumers (no CMake target propagation) see the correct value.
+          sed -i '' 's/T3_SHIM_SOCKS5_AVAILABLE 0/T3_SHIM_SOCKS5_AVAILABLE 1/' \
+            stage-device/lib/include/t3_features.h
           tar czf libteleproto3-ios-arm64.tar.gz -C stage-device .
           # simulator
           mkdir -p stage-sim/lib
           cp simulator/libteleproto3.a stage-sim/lib/
           cp -r simulator/include stage-sim/lib/include
+          sed -i '' 's/T3_SHIM_SOCKS5_AVAILABLE 0/T3_SHIM_SOCKS5_AVAILABLE 1/' \
+            stage-sim/lib/include/t3_features.h
           tar czf libteleproto3-ios-simulator.tar.gz -C stage-sim .
 
       - name: Upload artifact (device)
