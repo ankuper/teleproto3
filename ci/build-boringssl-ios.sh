@@ -132,8 +132,12 @@ build_bssl_slice() {
 }
 
 # ── Device: arm64 iphoneos ─────────────────────────────────────────────────────
+DEVICE_BUILD=""
+SIM_ARM64_BUILD=""
+SIM_X86_BUILD=""
+trap 'rm -rf "${DEVICE_BUILD:-}" "${SIM_ARM64_BUILD:-}" "${SIM_X86_BUILD:-}"' EXIT
+
 DEVICE_BUILD="$(mktemp -d "/tmp/bssl-ios-device-XXXXXX")"
-trap 'rm -rf "$DEVICE_BUILD"' EXIT
 
 build_bssl_slice iphoneos arm64 "$DEVICE_BUILD" "$OUT/device"
 
@@ -145,7 +149,6 @@ printf 'BoringSSL device done: %s\n' "$OUT/device"
 # ── Simulator: arm64 + x86_64 iphonesimulator ─────────────────────────────────
 SIM_ARM64_BUILD="$(mktemp -d "/tmp/bssl-ios-sim-arm64-XXXXXX")"
 SIM_X86_BUILD="$(mktemp -d "/tmp/bssl-ios-sim-x86-XXXXXX")"
-trap 'rm -rf "$DEVICE_BUILD" "$SIM_ARM64_BUILD" "$SIM_X86_BUILD"' EXIT
 
 build_bssl_slice iphonesimulator arm64   "$SIM_ARM64_BUILD" "$OUT/sim-arm64-tmp"
 build_bssl_slice iphonesimulator x86_64  "$SIM_X86_BUILD"   "$OUT/sim-x86-tmp"

@@ -88,6 +88,6 @@ jobs:
           # Create release if it doesn't exist yet (lib job may race us).
           gh release create "$TAG" --title "$TAG" 2>/dev/null || true
           gh release upload "$TAG" /tmp/t3-ios-out/libteleproto3-ios-arm64.tar.gz \
-            --repo "${{ github.repository }}"
+            --repo "${{ github.repository }}" --clobber
           gh release upload "$TAG" /tmp/t3-ios-out/libteleproto3-ios-simulator.tar.gz \
-            --repo "${{ github.repository }}"
+            --repo "${{ github.repository }}" --clobber
